@@ -2264,7 +2264,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
 </script>
 <!-- =====================================================================
      📤 قسم رفع الأوردرات (Google Sheet ← QP) — بيظهر في الصفحة #/qp-upload جوه السيستم
-     مكانه: آخر حاجة قبل </body> (بعد سكريبت الحسابات)
+     📍 مؤشر بيكمّل من آخر سطر · 🔁 مقارنة بالموبايل باللي على QP · 👤 اسم الأكونت من QP
      ===================================================================== -->
 <style>
 #qpu-root{--qpu-ink:#1f2933;--qpu-mut:#6b7280;--qpu-line:#e3e6ea;--qpu-bg:#fff;--qpu-soft:#f5f7f9;--qpu-pri:#1f3d36;--qpu-ok:#2f7d55;--qpu-bad:#b3261e;--qpu-warn:#b7791f;
@@ -2300,19 +2300,15 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
 </style>
 <script>
 /* ============================================================================================
-   📤 QP Uploader — بيجيب الأوردرات من شيت Google Sheets ويجهّزها ويرفعها على أكونت QP
-   - الإعدادات (رابط الشيت + بيانات QP) بتتحفظ في المتصفح بتاع الجهاز ده بس (localStorage)
-   - الأوردر اللي بيترفع بيتسجل إنه اتاخد، فمش بيرجع تاني لما تجيب من الشيت
-   - API بتاع QP: POST /integration/token  ·  GET /integration/cities  ·  POST /integration/order
+   📤 رفع الأوردرات — بيجيب الأوردرات من شيت Google ويرفعها على أكونت QP
+   - 📍 مؤشر: بيكمّل من بعد آخر سطر في الشيت اتاخد (مش بيقرا الشيت كله كل مرة)
+   - 🔁 قبل الرفع بيقارن بالموبايل بكل اللي على QP في آخر كام يوم، واللي مرفوع بالفعل بيتشال لوحده
+   - 👤 اسم الأكونت بيتجاب من QP نفسه وبيظهر قبل أي رفع
+   - API: integration/token + cities + order (للرفع) · api/token + addorders/order + settings (للمقارنة واسم الأكونت)
    ============================================================================================ */
 (function(){
-  // 📍 القسم بيترسم جوه #main لما تفتح #/qp-upload (زي المخزن والحسابات)
-  const isQ = () => (location.hash.replace('#/', '') || 'home').split('/')[0] === 'qp-upload';
-  function getRoot(){ const main = document.getElementById('main'); if(!main) return null;
-    let r = document.getElementById('qpu-root'); if(!r || !main.contains(r)){ main.innerHTML = '<div id="qpu-root"></div>'; r = document.getElementById('qpu-root'); } return r; }
-  let ROOT = null, started = false;
-  const QPI = 'https://api.qpxpress.com/integration/';
-  const LS = { cfg:'qpu_cfg', creds:'qpu_creds', done:'qpu_done', hist:'qpu_hist', map:'qpu_map' };
+  const QP = 'https://api.qpxpress.com', QPI = QP + '/integration/';
+  const LS = { cfg:'qpu_cfg', creds:'qpu_creds', creds2:'qpu_creds2', done:'qpu_done', hist:'qpu_hist', map:'qpu_map', ptr:'qpu_ptr' };
   const ld = (k, d) => { try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch(e){ return d; } };
   const sv = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -2324,75 +2320,121 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
   const tzIso = () => { const d = new Date(), o = -d.getTimezoneOffset(), p = n => String(Math.floor(Math.abs(n))).padStart(2, '0');
     return ymd(d) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + (o >= 0 ? '+' : '-') + p(o / 60) + ':' + p(o % 60); };
   const normAr = s => String(s || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/[ًٌٍَُِّْـ]/g, '').toLowerCase().trim();
+  const when = v => v ? new Date(v).toLocaleString('ar-EG', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : '';
 
-  const S = { cfg:ld(LS.cfg, { sheet:'', tab:'', notes:'', acctLabel:'' }), creds:ld(LS.creds, null), tok:null, acct:null, cities:null,
-    rows:null, msg:'', msgT:'', busy:false, prog:'', tab:'ready', done:new Set(ld(LS.done, [])), hist:ld(LS.hist, []), headers:null, map:ld(LS.map, {}) };
+  const S = { cfg:ld(LS.cfg, { sheet:'', tab:'', notes:'', days:30 }), creds:ld(LS.creds, null), creds2:ld(LS.creds2, null),
+    tok:null, tok2:null, acct:null, cities:null, rows:null, dropped:[], msg:'', msgT:'', busy:false, prog:'', tab:'ready',
+    done:new Set(ld(LS.done, [])), hist:ld(LS.hist, []), headers:null, map:ld(LS.map, {}), ptrs:ld(LS.ptr, {}), showMap:false, showSite:false };
 
   /* ---------- 🔐 QP ---------- */
-  function jwtClaims(t){ try{ const p = t.split('.')[1]; return JSON.parse(decodeURIComponent(escape(atob(p.replace(/-/g, '+').replace(/_/g, '/'))))); }catch(e){ return {}; } }
-  async function qpToken(force){
+  const jwt = t => { try{ return JSON.parse(decodeURIComponent(escape(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))))); }catch(e){ return {}; } };
+  const findKey = (o, re, d = 0) => { if(!o || typeof o !== 'object' || d > 4) return null; for(const [k, v] of Object.entries(o)){ if(re.test(k) && v != null && typeof v !== 'object' && String(v).trim()) return String(v); } for(const v of Object.values(o)){ const r = findKey(v, re, d + 1); if(r) return r; } return null; };
+  async function intToken(force){
     if(S.tok && !force) return S.tok;
     const c = S.creds; if(!c || !c.u) throw new Error('اكتب يوزر وباسورد QP الأول.');
     const r = await fetch(QPI + 'token', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ username:c.u, password:c.p }) });
     const j = await r.json().catch(() => ({}));
-    if(!r.ok || !(j.token || j.access)) throw new Error('QP رفض اليوزر والباسورد دول — اتأكد إنهم بيانات الـ Integration الصح.');
-    S.tok = j.token || j.access;
-    // 👤 اسم الأكونت: من رد QP أو من التوكن، وإلا اليوزر نيم
-    const cl = jwtClaims(S.tok), pick = o => o && (o.name || o.full_name || o.company || o.company_name || o.store_name || o.username || o.user_name);
-    S.acct = { name: pick(j) || pick(j.user) || pick(cl) || c.u, user:c.u, id: cl.user_id || cl.id || (j.user && j.user.id) || '' };
-    return S.tok;
+    if(!r.ok || !(j.token || j.access)) throw new Error('QP رفض اليوزر والباسورد دول للرفع (Integration).');
+    S.tok = j.token || j.access; S.tokRaw = j; return S.tok;
   }
-  async function qpCall(path, opt, retry){
-    const t = await qpToken();
+  async function siteToken(force){
+    if(S.tok2 && !force) return S.tok2;
+    const c = (S.creds2 && S.creds2.u) ? S.creds2 : S.creds; if(!c || !c.u) throw new Error('NO_SITE');
+    const r = await fetch(QP + '/api/token/', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ username:c.u, password:c.p }) });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok || !j.access) throw new Error('SITE_BAD');
+    S.tok2 = j.access; return S.tok2;
+  }
+  async function intCall(path, opt, retry){
+    const t = await intToken();
     const r = await fetch(QPI + path, { ...(opt || {}), headers:{ 'Content-Type':'application/json', Authorization:'Bearer ' + t } });
-    if(r.status === 401 && !retry){ S.tok = null; return qpCall(path, opt, true); }
+    if(r.status === 401 && !retry){ S.tok = null; return intCall(path, opt, true); }
     const txt = await r.text(); let j = null; try{ j = JSON.parse(txt); }catch(e){}
     if(!r.ok){ const m = j ? (j.detail || j.message || j.error || Object.entries(j).map(([k, v]) => k + ': ' + (Array.isArray(v) ? v.join('، ') : (typeof v === 'object' ? JSON.stringify(v) : v))).join(' | ')) : txt.slice(0, 200); throw new Error(m || 'HTTP ' + r.status); }
     return j;
   }
+  async function siteGet(url, retry){
+    const t = await siteToken();
+    const r = await fetch(url, { headers:{ Authorization:'Bearer ' + t } });
+    if(r.status === 401 && !retry){ S.tok2 = null; return siteGet(url, true); }
+    if(!r.ok) throw new Error('QP رجّع خطأ (' + r.status + ')');
+    return r.json();
+  }
+  // 👤 اسم الأكونت من QP نفسه (إعدادات اليوزر على الموقع، أو من التوكن)
+  async function loadAccount(){
+    const NAME = /^(company_?name|store_?name|brand_?name|business_?name|customer_?name|full_?name|name|first_?name|username|user_?name)$/i;
+    let name = null, from = '';
+    try{ const st = await siteGet(QP + '/settings/get_user_settings'); name = findKey(st, /^(company_?name|store_?name|brand_?name|business_?name|customer_?name)$/i) || findKey(st, NAME); if(name) from = 'QP'; }catch(e){}
+    if(!name){ const p = jwt(S.tok2 || ''); name = findKey(p, NAME); if(name) from = 'QP'; }
+    if(!name){ const p = jwt(S.tok || ''); name = findKey(S.tokRaw || {}, NAME) || findKey(p, NAME); if(name) from = 'QP'; }
+    S.acct = { name: name || (S.creds || {}).u, user:(S.creds || {}).u, fromQP: !!from };
+  }
   async function connect(){
     S.busy = true; msg('بيتصل بـ QP...', 'info');
-    try{ await qpToken(true); const j = await qpCall('cities');
+    try{
+      await intToken(true);
+      const j = await intCall('cities');
       S.cities = (Array.isArray(j) ? j : (j && (j.results || j.data)) || []).map(c => ({ id:c.id, name:String(c.name || c.city || '').trim() })).filter(c => c.name);
-      msg(`✅ متصل بأكونت QP: ${acctName()} (${S.cities.length} مدينة)`, 'ok'); if(S.rows) S.rows.forEach(check); }
-    catch(e){ S.tok = null; S.acct = null; msg(/Failed to fetch|NetworkError/i.test(e.message) ? 'مش قادر يوصل لـ QP — اتأكد من الإنترنت.' : e.message, 'err'); }
+      S.siteOk = false;
+      try{ await siteToken(true); S.siteOk = true; }catch(e){ S.siteErr = e.message; }
+      await loadAccount();
+      msg(S.siteOk ? `✅ متصل بأكونت QP: ${S.acct.name}` : `✅ متصل للرفع — بس ⚠️ مش قادر يدخل موقع QP عشان يقارن باللي اترفع قبل كده. اكتب بيانات دخول موقع QP تحت.`, S.siteOk ? 'ok' : 'err');
+      if(!S.siteOk) S.showSite = true;
+      if(S.rows) S.rows.forEach(check);
+    }catch(e){ S.tok = null; S.acct = null; msg(/Failed to fetch|NetworkError/i.test(e.message) ? 'مش قادر يوصل لـ QP — اتأكد من الإنترنت.' : e.message, 'err'); }
     S.busy = false; draw();
   }
-  const acctName = () => S.cfg.acctLabel ? `${S.cfg.acctLabel} (${S.acct ? S.acct.user : (S.creds || {}).u})` : (S.acct ? S.acct.name + (S.acct.name !== S.acct.user ? ` (${S.acct.user})` : '') : ((S.creds || {}).u || '—'));
+  const acctName = () => S.acct ? S.acct.name + (S.acct.name !== S.acct.user ? ` (${S.acct.user})` : '') : ((S.creds || {}).u || '—');
   function guessCity(text){
     if(!S.cities) return '';
     const words = normAr(text).split(/[\s,،\-\/]+/).filter(Boolean).map(w => w.replace(/^ال/, '')), t = ' ' + words.join(' ') + ' ';
     let best = ''; S.cities.forEach(c => { const n = normAr(c.name).split(/\s+/).map(w => w.replace(/^ال/, '')).join(' '); if(n && t.includes(' ' + n + ' ') && n.length > normAr(best).length) best = c.name; });
     return best;
   }
+  // 🔁 كل أوردرات QP في آخر X يوم (حتى المرفوضة) ← فهرس بالموبايل
+  async function qpPhones(){
+    const days = Math.max(1, Number(S.cfg.days) || 30), to = new Date(), from = new Date(); from.setDate(from.getDate() - days);
+    const idx = {}, fromT = from.getTime();
+    for(const rej of [0, 1]){
+      for(let page = 1; page <= 300; page++){
+        const url = QP + '/addorders/order/?rejected=' + rej + '&printO=All&status=&order_serial=&full_name=&phone_number=&city=&order_date=' + ymd(from) + '&to_date=' + ymd(to) + '&page=' + page + '&page_size=100';
+        const j = await siteGet(url), L = j.results || []; if(!L.length) break;
+        let older = false;
+        L.forEach(q => { const t = new Date(q.order_date).getTime(); if(!isNaN(t) && t < fromT){ older = true; return; }
+          [q.phone, q.phone2, q.customer_phone].forEach(ph => { const k = phoneOf(ph); if(k && k.length >= 10){ (idx[k] = idx[k] || []); if(!idx[k].some(x => x.serial === q.serial)) idx[k].push(q); } }); });
+        S.prog = `بيقارن بـ QP... صفحة ${page}`; draw();
+        if(older || !j.next) break;
+      }
+    }
+    S.prog = '';
+    return idx;
+  }
 
-  /* ---------- 📄 Google Sheet ---------- */
+  /* ---------- 📄 الشيت + 📍 المؤشر ---------- */
   function sheetUrl(){
     const v = String(S.cfg.sheet || '').trim(); if(!v) return null;
-    if(/output=csv|tqx=out:csv/.test(v)) return v;                                   // رابط CSV جاهز
+    if(/output=csv|tqx=out:csv/.test(v)) return v;
     const m = v.match(/\/d\/([a-zA-Z0-9-_]+)/) || v.match(/^([a-zA-Z0-9-_]{25,})$/); if(!m) return null;
     const gid = (v.match(/[#&?]gid=(\d+)/) || [])[1];
     return `https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv` + (S.cfg.tab ? '&sheet=' + encodeURIComponent(S.cfg.tab) : gid ? '&gid=' + gid : '');
   }
+  const sheetKey = () => { const u = sheetUrl() || ''; return (u.match(/\/d\/([a-zA-Z0-9-_]+)/) || [u])[1] + '|' + (S.cfg.tab || (u.match(/gid=(\d+)/) || [])[1] || ''); };
+  const P = () => S.ptrs[sheetKey()] || { line:1, at:null };   // سطر 1 = العناوين
+  function setPtr(line){ S.ptrs[sheetKey()] = { line, at:new Date().toISOString() }; sv(LS.ptr, S.ptrs); }
   function parseCSV(t){
     const rows = []; let row = [], cur = '', q = false;
     for(let i = 0; i < t.length; i++){ const c = t[i];
       if(q){ if(c === '"'){ if(t[i + 1] === '"'){ cur += '"'; i++; } else q = false; } else cur += c; }
       else if(c === '"') q = true; else if(c === ','){ row.push(cur); cur = ''; } else if(c === '\n' || c === '\r'){ if(c === '\r' && t[i + 1] === '\n') i++; row.push(cur); rows.push(row); row = []; cur = ''; } else cur += c; }
     if(cur !== '' || row.length){ row.push(cur); rows.push(row); }
-    return rows.filter(r => r.some(x => String(x).trim()));
+    return rows;
   }
-  // الأعمدة: بيتعرف عليها لوحده من العناوين، وتقدر تغيّرها من "🧩 الأعمدة"
   const FIELDS = [ ['name', 'الاسم', /^(name|full ?name|customer|الاسم|اسم العميل|العميل)/i], ['phone', 'الموبايل', /(phone|mobile|موبايل|تليفون|رقم|هاتف)/i],
     ['phone2', 'موبايل تاني (اختياري)', /(phone ?2|second|تاني|اخر|آخر)/i], ['address', 'العنوان', /(address|عنوان)/i], ['city', 'المحافظة / المدينة (اختياري)', /(city|gov|محافظ|مدينه|مدينة)/i],
     ['amount', 'السعر (المطلوب تحصيله)', /(total|price|amount|سعر|اجمالي|إجمالي|المبلغ|تحصيل)/i], ['contents', 'الطلب / المحتوى', /(content|product|item|order|الطلب|المنتج|المحتوي|الاوردر)/i],
     ['notes', 'notes (اختياري)', /(note|ملاحظ|براند|brand)/i], ['id', 'رقم الأوردر في الشيت (اختياري)', /^(id|order ?id|#|رقم الاوردر|رقم الطلب|كود)$/i] ];
-  function autoMap(H){
-    const m = {}, used = new Set();
-    FIELDS.forEach(([k, , re]) => { const i = H.findIndex((h, ix) => !used.has(ix) && re.test(String(h).trim())); if(i >= 0){ m[k] = i; used.add(i); } });
-    return m;
-  }
-  const rowKey = r => r.id ? 'id:' + r.id : 'k:' + phoneOf(r.phone) + '|' + normAr(r.contents).slice(0, 40) + '|' + (numOf(r.amount) || 0);
+  function autoMap(H){ const m = {}, used = new Set(); FIELDS.forEach(([k, , re]) => { const i = H.findIndex((h, ix) => !used.has(ix) && re.test(String(h).trim())); if(i >= 0){ m[k] = i; used.add(i); } }); return m; }
+  const rowKey = r => sheetKey() + '#' + (r.id ? 'id:' + r.id : 'L' + r.line);
   function check(r){
     r.errs = [];
     if(!String(r.name).trim()) r.errs.push('الاسم فاضي');
@@ -2400,29 +2442,48 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     if(String(r.address).trim().length < 5) r.errs.push('العنوان ناقص');
     if(numOf(r.amount) === null) r.errs.push('السعر مش رقم');
     if(!String(r.contents).trim()) r.errs.push('الطلب فاضي');
-    if(!String(r.city || '').trim()){ r.city = guessCity((r.cityRaw || '') + ' ' + r.address); }
+    if(!String(r.city || '').trim()) r.city = guessCity((r.cityRaw || '') + ' ' + r.address);
     if(S.cities && !r.city) r.errs.push('المدينة مش واضحة');
     return r;
   }
   function dupCheck(){ const c = {}; (S.rows || []).forEach(r => { const k = phoneOf(r.phone); if(k) c[k] = (c[k] || 0) + 1; }); (S.rows || []).forEach(r => r.dup = c[phoneOf(r.phone)] > 1); }
   async function fetchSheet(){
-    const url = sheetUrl(); if(!url) return msg('حط رابط الشيت الأول (رابط Google Sheet العادي أو رابط CSV منشور).', 'err');
-    S.busy = true; msg('بيجيب الأوردرات من الشيت...', 'info');
+    const url = sheetUrl(); if(!url) return msg('حط رابط الشيت الأول.', 'err');
+    if(!S.tok){ await connect(); if(!S.tok) return; }
+    if(!S.siteOk) return msg('⚠️ لازم يدخل موقع QP الأول عشان يتأكد إن الأوردرات مااترفعتش قبل كده — اكتب بيانات دخول موقع QP في خانة الأكونت.', 'err');
+    S.busy = true; msg('بيجيب الأوردرات الجديدة من الشيت...', 'info');
     try{
       const r = await fetch(url, { cache:'no-store' }); const t = await r.text();
-      if(!r.ok || /<html/i.test(t.slice(0, 200))) throw new Error('مش قادر يقرا الشيت — لازم يكون متشارك "Anyone with the link can view" (أو منشور CSV).');
+      if(!r.ok || /<html/i.test(t.slice(0, 200))) throw new Error('مش قادر يقرا الشيت — لازم يكون متشارك "Anyone with the link can view".');
       const A = parseCSV(t); if(A.length < 2) throw new Error('الشيت فاضي.');
       const H = A[0].map(x => String(x).trim()); S.headers = H;
       const sig = H.join('|'); if(!S.map[sig]){ S.map[sig] = autoMap(H); sv(LS.map, S.map); }
       const M = S.map[sig], g = (row, k) => M[k] !== undefined && M[k] !== '' ? String(row[M[k]] ?? '').trim() : '';
-      const all = A.slice(1).map((row, i) => ({ line:i + 2, id:g(row, 'id'), name:g(row, 'name'), phone:g(row, 'phone'), phone2:g(row, 'phone2'), address:g(row, 'address'), cityRaw:g(row, 'city'), city:'',
-        amount:g(row, 'amount'), contents:g(row, 'contents'), notes:g(row, 'notes') })).filter(r => r.name || r.phone || r.contents);
-      if(S.cities) all.forEach(r => { const c = guessCity(r.cityRaw); if(c) r.city = c; });
-      const fresh = all.filter(r => !S.done.has(rowKey(r)));
-      S.rows = fresh.map(check); dupCheck(); S.tab = 'ready';
-      msg(`📥 الشيت فيه ${all.length} أوردر — ${fresh.length} لسه ماترفعوش${all.length - fresh.length ? ` (و ${all.length - fresh.length} اترفعوا قبل كده ومش هيظهروا)` : ''}.`, 'ok');
-    }catch(e){ msg(/Failed to fetch/i.test(e.message) ? 'مش قادر يوصل للشيت — اتأكد إنه متشارك "Anyone with the link can view".' : e.message, 'err'); }
-    S.busy = false; draw();
+      const ptr = P().line;
+      // 📍 بيكمّل من بعد المؤشر بس
+      const after = A.slice(1).map((row, i) => ({ line:i + 2, id:g(row, 'id'), name:g(row, 'name'), phone:g(row, 'phone'), phone2:g(row, 'phone2'), address:g(row, 'address'), cityRaw:g(row, 'city'), city:'',
+        amount:g(row, 'amount'), contents:g(row, 'contents'), notes:g(row, 'notes') })).filter(x => x.line > ptr && (x.name || x.phone || x.contents));
+      const fresh = after.filter(x => !S.done.has(rowKey(x)));
+      if(S.cities) fresh.forEach(x => { const c = guessCity(x.cityRaw); if(c) x.city = c; });
+      // 🔁 المقارنة بـ QP بالموبايل
+      const idx = await qpPhones();
+      const drop = [], keep = [];
+      fresh.forEach(x => { const L = [x.phone, x.phone2].map(phoneOf).filter(Boolean).flatMap(k => idx[k] || []); if(L.length){ x.qp = L[0]; drop.push(x); } else keep.push(x); });
+      drop.forEach(x => S.done.add(rowKey(x))); sv(LS.done, [...S.done].slice(-30000));
+      S.dropped = drop; S.rows = keep.map(check); dupCheck(); S.tab = 'ready';
+      advancePtr(A.length);
+      msg(`📥 من بعد السطر ${ptr}: ${fresh.length} أوردر — ✅ ${keep.length} لسه ماترفعوش${drop.length ? ` · 🔁 شلت ${drop.length} لأنهم مرفوعين بالفعل على QP (آخر ${S.cfg.days} يوم)` : ''}.`, 'ok');
+    }catch(e){ msg(e.message === 'SITE_BAD' ? 'QP رفض دخول الموقع — اتأكد من بيانات دخول موقع QP.' : /Failed to fetch/i.test(e.message) ? 'مش قادر يوصل للشيت أو لـ QP — اتأكد إن الشيت متشارك "Anyone with the link can view".' : e.message, 'err'); }
+    S.busy = false; S.prog = ''; draw();
+  }
+  // 📍 المؤشر بيتقدّم على السطور المتتالية اللي اتاخدت (اترفعت / اتشالت / كانت على QP)
+  function advancePtr(lastLine){
+    if(lastLine) S.lastLine = lastLine;
+    let line = P().line;
+    const pending = new Set((S.rows || []).filter(r => !r.serial).map(r => r.line));
+    const maxLine = Math.max(line, S.lastLine || 0, ...[...(S.rows || []), ...(S.dropped || [])].map(r => r.line));
+    while(line < maxLine){ const nx = line + 1; if(pending.has(nx)) break; line = nx; }
+    if(line !== P().line) setPtr(line);
   }
 
   /* ---------- 🚀 الرفع ---------- */
@@ -2431,27 +2492,26 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
   async function upload(){
     const L = ready(); if(!L.length) return;
     if(!S.tok){ await connect(); if(!S.tok) return; }
+    await loadAccount().catch(() => {});
     const total = L.reduce((a, r) => a + (numOf(r.amount) || 0), 0);
-    if(!confirm(`⚠️ هيترفع على أكونت QP:\n\n👤 ${acctName()}\n\n• ${L.length} أوردر\n• إجمالي ${total.toLocaleString('ar-EG')} ج\n\nده الأكونت الصح؟ موافق ترفع؟`)) return;
+    if(!confirm(`⚠️ هيترفع على أكونت QP:\n\n👤 ${acctName()}${S.acct && S.acct.fromQP ? '  (الاسم من QP)' : ''}\n\n• ${L.length} أوردر\n• إجمالي ${total.toLocaleString('ar-EG')} ج\n\nده الأكونت الصح؟ موافق ترفع؟`)) return;
     S.busy = true; let ok = 0, fail = 0;
     for(let i = 0; i < L.length; i++){
       const r = L[i]; S.prog = `بيرفع ${i + 1} من ${L.length}...`; draw();
       try{
-        const body = { full_name:r.name.trim(), phone:'0' + phoneOf(r.phone), address:r.address.trim(), total_amount:numOf(r.amount), notes:noteOf(r), order_date:tzIso(),
-          shipment_contents:r.contents.trim(), weight:'1.00', city:String(r.city || '').trim() };
+        const body = { full_name:r.name.trim(), phone:'0' + phoneOf(r.phone), address:r.address.trim(), total_amount:numOf(r.amount), notes:noteOf(r), order_date:tzIso(), shipment_contents:r.contents.trim(), weight:'1.00', city:String(r.city || '').trim() };
         if(r.phone2 && isPhone(r.phone2)) body.phone2 = '0' + phoneOf(r.phone2);
         let res;
-        try{ res = await qpCall('order', { method:'POST', body:JSON.stringify(body) }); }
-        catch(e1){ if(body.city || !/city|مدين/i.test(e1.message)) throw e1; const b2 = { ...body }; delete b2.city; res = await qpCall('order', { method:'POST', body:JSON.stringify(b2) }); }
-        r.serial = String((res && (res.serial || res.order_serial || (res.data && res.data.serial) || res.id)) || '✔'); r.upErr = ''; ok++;
-        S.done.add(rowKey(r));
+        try{ res = await intCall('order', { method:'POST', body:JSON.stringify(body) }); }
+        catch(e1){ if(body.city || !/city|مدين/i.test(e1.message)) throw e1; const b2 = { ...body }; delete b2.city; res = await intCall('order', { method:'POST', body:JSON.stringify(b2) }); }
+        r.serial = String((res && (res.serial || res.order_serial || (res.data && res.data.serial) || res.id)) || '✔'); r.upErr = ''; ok++; S.done.add(rowKey(r));
       }catch(e){ r.upErr = e.message; fail++; }
     }
-    sv(LS.done, [...S.done].slice(-20000));
+    sv(LS.done, [...S.done].slice(-30000)); advancePtr();
     const up = L.filter(r => r.serial);
     if(up.length){ S.hist.unshift({ at:new Date().toISOString(), acct:acctName(), n:up.length, total:up.reduce((a, r) => a + (numOf(r.amount) || 0), 0), orders:up.map(r => ({ serial:r.serial, name:r.name, phone:r.phone, amount:r.amount, line:r.line })) }); S.hist = S.hist.slice(0, 50); sv(LS.hist, S.hist); }
     S.busy = false; S.prog = '';
-    msg(`✅ اترفع ${ok} أوردر على ${acctName()}${fail ? ` — ❌ ${fail} مارفعوش (السبب مكتوب جنب كل واحد)` : ''}.`, fail ? 'err' : 'ok'); S.tab = fail ? 'bad' : 'done'; draw();
+    msg(`✅ اترفع ${ok} أوردر على ${acctName()}${fail ? ` — ❌ ${fail} مارفعوش (السبب مكتوب جنب كل واحد)` : ''}. 📍 المؤشر بقى عند سطر ${P().line}.`, fail ? 'err' : 'ok'); S.tab = fail ? 'bad' : 'done'; draw();
   }
   function csvDownload(name, rows){
     const s = rows.map(r => r.map(v => { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(',')).join('\n');
@@ -2461,86 +2521,106 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
   /* ---------- 🖥️ الشاشة ---------- */
   function msg(t, k){ S.msg = t; S.msgT = k || 'info'; draw(); }
   function view(){
-    const c = S.cfg, cr = S.creds || {};
-    let h = `<div class="qpu-card"><h2>📤 رفع الأوردرات على QP</h2><p style="margin:0;color:var(--qpu-mut)">بيجيب الأوردرات من شيت Google ويجهّزها ويرفعها على أكونت QP — اللي بيترفع مش بيرجع تاني.</p></div>`;
+    const c = S.cfg, cr = S.creds || {}, c2 = S.creds2 || {};
+    let h = `<div class="qpu-card"><h2>📤 رفع الأوردرات على QP</h2><p style="margin:0;color:var(--qpu-mut)">بيكمّل من بعد آخر سطر اتاخد في الشيت، وبيشيل أي أوردر رقمه موجود بالفعل على QP، وبعدين ترفع الباقي.</p></div>`;
     if(S.msg) h += `<div class="qpu-msg ${S.msgT}">${esc(S.msg)}</div>`;
-    // 1) QP
-    h += `<div class="qpu-card"><h3>1️⃣ أكونت QP</h3>${S.tok ? `<div class="qpu-row"><span class="qpu-acct">👤 متصل بـ: ${esc(acctName())}</span><button class="qpu-btn" data-a="logout">🔄 غيّر الأكونت</button></div>`
-      : `<div class="qpu-grid"><div><label>يوزر نيم QP (Integration)</label><input id="qpuU" value="${esc(cr.u || '')}" autocomplete="off" style="direction:ltr"></div><div><label>الباسورد</label><input id="qpuP" type="password" value="${esc(cr.p || '')}" autocomplete="new-password" style="direction:ltr"></div>
-        <div><label>اسم الأكونت (يظهرلك قبل الرفع — اختياري)</label><input id="qpuL" value="${esc(c.acctLabel || '')}" placeholder="مثلاً: براند X"></div></div>
-        <div class="qpu-row" style="margin-top:10px"><button class="qpu-btn pri" data-a="login" ${S.busy ? 'disabled' : ''}>🔐 ادخل على QP</button><label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="qpuRem" style="width:auto" ${cr.u ? 'checked' : ''}> افتكرني على الجهاز ده</label></div>`}</div>`;
-    // 2) الشيت
-    h += `<div class="qpu-card"><h3>2️⃣ الشيت</h3><div class="qpu-grid"><div style="grid-column:1/-1"><label>رابط Google Sheet (لازم يكون "Anyone with the link can view") أو رابط CSV منشور</label><input id="qpuS" value="${esc(c.sheet)}" placeholder="https://docs.google.com/spreadsheets/d/..../edit#gid=0" style="direction:ltr"></div>
-      <div><label>اسم التاب (اختياري)</label><input id="qpuT" value="${esc(c.tab)}" placeholder="Sheet1"></div><div><label>notes الافتراضية (لو الشيت مافيهوش notes)</label><input id="qpuN" value="${esc(c.notes)}" placeholder="مثلاً: brand x"></div></div>
-      <div class="qpu-row" style="margin-top:10px"><button class="qpu-btn pri" data-a="fetch" ${S.busy ? 'disabled' : ''}>${S.busy && !S.prog ? '⏳ بيجيب...' : '📥 هات كل الأوردرات'}</button>${S.headers ? '<button class="qpu-btn" data-a="map">🧩 الأعمدة</button>' : ''}</div>
+    h += `<div class="qpu-card"><h3>1️⃣ أكونت QP</h3>${S.tok ? `<div class="qpu-row"><span class="qpu-acct">👤 متصل بأكونت: ${esc(acctName())}${S.acct && S.acct.fromQP ? ' <small style="font-weight:400">(الاسم من QP)</small>' : ''}</span>
+        ${S.siteOk ? '<span class="qpu-tag ok">🔁 المقارنة بـ QP شغالة</span>' : '<span class="qpu-tag bad">⚠️ المقارنة بـ QP مش شغالة</span>'}<button class="qpu-btn" data-a="logout">🔄 غيّر الأكونت</button></div>` : ''}
+      ${!S.tok || S.showSite ? `<div class="qpu-grid" style="margin-top:${S.tok ? 10 : 0}px">${!S.tok ? `<div><label>يوزر نيم QP</label><input id="qpuU" value="${esc(cr.u || '')}" autocomplete="off" style="direction:ltr"></div><div><label>الباسورد</label><input id="qpuP" type="password" value="${esc(cr.p || '')}" autocomplete="new-password" style="direction:ltr"></div>` : ''}
+        ${S.showSite ? `<div><label>يوزر موقع QP (لو مختلف عن يوزر الرفع)</label><input id="qpuU2" value="${esc(c2.u || '')}" autocomplete="off" style="direction:ltr"></div><div><label>باسورد موقع QP</label><input id="qpuP2" type="password" value="${esc(c2.p || '')}" autocomplete="new-password" style="direction:ltr"></div>` : ''}</div>
+        <div class="qpu-row" style="margin-top:10px"><button class="qpu-btn pri" data-a="login" ${S.busy ? 'disabled' : ''}>🔐 ادخل على QP</button>${!S.tok ? `<label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="qpuRem" style="width:auto" ${cr.u ? 'checked' : ''}> افتكرني على الجهاز ده</label>` : ''}
+          ${!S.showSite ? '<a href="#" data-a="site" style="font-size:12.5px">بيانات موقع QP مختلفة؟</a>' : ''}</div>` : ''}</div>`;
+    const p = P();
+    h += `<div class="qpu-card"><h3>2️⃣ الشيت</h3><div class="qpu-grid"><div style="grid-column:1/-1"><label>رابط Google Sheet (لازم يكون "Anyone with the link can view")</label><input id="qpuS" value="${esc(c.sheet)}" placeholder="https://docs.google.com/spreadsheets/d/..../edit#gid=0" style="direction:ltr"></div>
+      <div><label>اسم التاب (اختياري)</label><input id="qpuT" value="${esc(c.tab)}" placeholder="Sheet1"></div><div><label>notes الافتراضية</label><input id="qpuN" value="${esc(c.notes)}" placeholder="مثلاً: brand x"></div>
+      <div><label>قارن باللي على QP في آخر (يوم)</label><input id="qpuD" type="number" min="1" value="${esc(c.days || 30)}"></div></div>
+      ${sheetUrl() ? `<div class="qpu-row" style="margin-top:10px;padding:8px 12px;border-radius:10px;background:var(--qpu-soft)">📍 <b>المؤشر واقف عند سطر ${p.line}</b>${p.line <= 1 ? ' (هيبدأ من أول الشيت)' : ` — هيجيب من سطر ${p.line + 1} ورايح`}${p.at ? ` <span style="color:var(--qpu-mut);font-size:12.5px">· اتحرّك ${esc(when(p.at))}</span>` : ''}
+        <span style="flex:1"></span><label style="margin:0;display:flex;gap:6px;align-items:center">غيّره لسطر <input id="qpuPtr" type="number" min="1" value="${p.line}" style="width:90px"></label><button class="qpu-btn" data-a="setptr" style="padding:6px 12px">💾</button></div>` : ''}
+      <div class="qpu-row" style="margin-top:10px"><button class="qpu-btn pri" data-a="fetch" ${S.busy ? 'disabled' : ''}>${S.busy && !S.prog.startsWith('بيرفع') ? '⏳ ' + esc(S.prog || 'بيجيب...') : '📥 هات الأوردرات الجديدة'}</button>${S.headers ? '<button class="qpu-btn" data-a="map">🧩 الأعمدة</button>' : ''}</div>
       ${S.showMap && S.headers ? mapHtml() : ''}</div>`;
-    // 3) الأوردرات
     if(S.rows){
       const R = S.rows, rd = ready(), bad = R.filter(r => !r.serial && r.errs.length), dn = R.filter(r => r.serial), tot = rd.reduce((a, r) => a + (numOf(r.amount) || 0), 0);
-      h += `<div class="qpu-card"><h3>3️⃣ الأوردرات</h3><div class="qpu-kpis"><div class="qpu-kpi"><b>${R.length}</b><span>جات من الشيت</span></div><div class="qpu-kpi"><b style="color:var(--qpu-ok)">${rd.length}</b><span>✅ جاهزة للرفع</span></div>
-        <div class="qpu-kpi"><b style="color:var(--qpu-bad)">${bad.length}</b><span>⚠️ فيها مشاكل</span></div><div class="qpu-kpi"><b>${tot.toLocaleString('ar-EG')}</b><span>إجمالي الجاهزين (ج)</span></div><div class="qpu-kpi"><b>${dn.length}</b><span>📦 اترفعت دلوقتي</span></div></div>
-        <div class="qpu-row"><button class="qpu-btn ok" data-a="upload" ${!rd.length || S.busy ? 'disabled' : ''}>${S.prog ? '⏳ ' + esc(S.prog) : `🚀 ارفع الـ ${rd.length} الجاهزين على QP`}</button>${S.tok ? `<span style="font-size:13px;color:var(--qpu-mut)">على أكونت: <b>${esc(acctName())}</b></span>` : '<span style="font-size:13px;color:var(--qpu-warn)">⚠️ ادخل على QP الأول (فوق)</span>'}
+      h += `<div class="qpu-card"><h3>3️⃣ الأوردرات</h3><div class="qpu-kpis"><div class="qpu-kpi"><b style="color:var(--qpu-ok)">${rd.length}</b><span>✅ جاهزة للرفع</span></div>
+        <div class="qpu-kpi"><b style="color:var(--qpu-bad)">${bad.length}</b><span>⚠️ فيها مشاكل</span></div><div class="qpu-kpi"><b>${(S.dropped || []).length}</b><span>🔁 مرفوعة بالفعل على QP (اتشالت)</span></div>
+        <div class="qpu-kpi"><b>${tot.toLocaleString('ar-EG')}</b><span>إجمالي الجاهزين (ج)</span></div><div class="qpu-kpi"><b>${dn.length}</b><span>📦 اترفعت دلوقتي</span></div></div>
+        <div class="qpu-row"><button class="qpu-btn ok" data-a="upload" ${!rd.length || S.busy ? 'disabled' : ''}>${S.prog.startsWith('بيرفع') ? '⏳ ' + esc(S.prog) : `🚀 ارفع الـ ${rd.length} الجاهزين على QP`}</button><span style="font-size:13px;color:var(--qpu-mut)">على أكونت: <b>${esc(acctName())}</b></span>
           ${dn.length ? '<button class="qpu-btn" data-a="csv">⬇️ نزّل اللي اترفع (CSV)</button>' : ''}</div>
-        <div class="qpu-tabs">${[['ready', `✅ جاهزة (${rd.length})`], ['bad', `⚠️ فيها مشاكل (${bad.length})`], ['done', `📦 اترفعت (${dn.length})`]].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
-        ${tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
-        <p style="font-size:12.5px;color:var(--qpu-mut);margin:8px 0 0">💡 تقدر تعدّل أي خانة في الجدول بالضغط عليها، والتعديل بيتشيك على طول. ✕ بيشيل الأوردر ومايرجعش تاني.</p></div>`;
+        <div class="qpu-tabs">${[['ready', `✅ جاهزة (${rd.length})`], ['bad', `⚠️ فيها مشاكل (${bad.length})`], ['qp', `🔁 على QP بالفعل (${(S.dropped || []).length})`], ['done', `📦 اترفعت (${dn.length})`]].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
+        ${S.tab === 'qp' ? qpTable() : tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
+        <p style="font-size:12.5px;color:var(--qpu-mut);margin:8px 0 0">💡 تقدر تعدّل أي خانة بالضغط عليها. ✕ بيشيل الأوردر ومايرجعش. 📍 المؤشر بيتحرك لوحده بعد الرفع لحد أول أوردر لسه مستني.</p></div>`;
     }
-    // سجل الرفع
     if(S.hist.length) h += `<div class="qpu-card"><details><summary>🕒 سجل الرفع (${S.hist.length})</summary><div class="qpu-tw" style="margin-top:8px"><table><tr><th>إمتى</th><th>الأكونت</th><th>عدد</th><th>إجمالي</th><th></th></tr>
       ${S.hist.map((x, i) => `<tr><td>${esc(new Date(x.at).toLocaleString('ar-EG'))}</td><td>${esc(x.acct || '')}</td><td>${x.n}</td><td>${Number(x.total || 0).toLocaleString('ar-EG')}</td><td><button class="qpu-btn" data-hcsv="${i}" style="padding:4px 10px">⬇️ CSV</button></td></tr>`).join('')}</table></div></details></div>`;
     return h;
   }
+  function qpTable(){
+    const L = S.dropped || []; if(!L.length) return '<p style="color:var(--qpu-mut)">مفيش.</p>';
+    return `<div class="qpu-tw"><table><tr><th>سطر</th><th>الاسم</th><th>الموبايل</th><th>السعر</th><th>على QP</th><th></th></tr>
+      ${L.map((r, i) => `<tr><td>${r.line}</td><td>${esc(r.name)}</td><td style="direction:ltr">${esc(r.phone)}</td><td>${esc(r.amount)}</td><td>${r.qp ? `<b>${esc(r.qp.serial)}</b> · ${esc(when(r.qp.order_date))}` : ''}</td>
+        <td><button class="qpu-btn" data-undrop="${i}" style="padding:3px 9px;font-size:12px">↩️ رجّعه (أوردر جديد)</button></td></tr>`).join('')}</table></div>`;
+  }
   function mapHtml(){
     const sig = S.headers.join('|'), M = S.map[sig] || {};
     return `<div style="margin-top:12px;padding:12px;border:1px dashed var(--qpu-line);border-radius:10px"><b>🧩 كل خانة جاية من أنهي عمود في الشيت:</b><div class="qpu-grid" style="margin-top:8px">
-      ${FIELDS.map(([k, l]) => `<div><label>${l}</label><select data-map="${k}"><option value="">— مش موجود —</option>${S.headers.map((hd, i) => `<option value="${i}" ${String(M[k]) === String(i) ? 'selected' : ''}>${esc(hd || 'عمود ' + (i + 1))}</option>`).join('')}</select></div>`).join('')}</div>
-      <p style="font-size:12.5px;color:var(--qpu-mut);margin:8px 0 0">بعد ما تغيّر دوس "📥 هات كل الأوردرات" تاني.</p></div>`;
+      ${FIELDS.map(([k, l]) => `<div><label>${l}</label><select data-map="${k}"><option value="">— مش موجود —</option>${S.headers.map((hd, i) => `<option value="${i}" ${String(M[k]) === String(i) ? 'selected' : ''}>${esc(hd || 'عمود ' + (i + 1))}</option>`).join('')}</select></div>`).join('')}</div></div>`;
   }
   function tableHtml(L){
     if(!L.length) return '<p style="color:var(--qpu-mut)">مفيش.</p>';
     const ed = (r, k) => `<td contenteditable="${r.serial ? 'false' : 'true'}" data-ed="${S.rows.indexOf(r)}" data-k="${k}" ${k === 'phone' ? 'style="direction:ltr"' : ''}>${esc(r[k])}</td>`;
     return `<div class="qpu-tw"><table><tr><th>سطر</th><th>الاسم</th><th>الموبايل</th><th>العنوان</th><th>المدينة</th><th>السعر</th><th>الطلب</th><th>notes</th><th>الحالة</th><th></th></tr>
       ${L.map(r => `<tr class="${r.serial ? 'done' : r.errs.length || r.upErr ? 'bad' : ''}"><td>${r.line}</td>${ed(r, 'name')}${ed(r, 'phone')}${ed(r, 'address')}
-        <td>${r.serial ? esc(r.city) : `<select data-city="${S.rows.indexOf(r)}" style="min-width:120px;padding:4px"><option value="">—</option>${(S.cities || []).map(c => `<option ${c.name === r.city ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}${r.city && !(S.cities || []).some(c => c.name === r.city) ? `<option selected>${esc(r.city)}</option>` : ''}</select>`}</td>
+        <td>${r.serial ? esc(r.city) : `<select data-city="${S.rows.indexOf(r)}" style="min-width:120px;padding:4px"><option value="">—</option>${(S.cities || []).map(c => `<option ${c.name === r.city ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`}</td>
         ${ed(r, 'amount')}${ed(r, 'contents')}<td>${esc(noteOf(r))}</td>
         <td>${r.serial ? `<span class="qpu-tag ok">✅ ${esc(r.serial)}</span>` : ''}${r.errs.map(e => `<span class="qpu-tag bad">${esc(e)}</span>`).join('')}${r.dup && !r.serial ? '<span class="qpu-tag w">رقم متكرر</span>' : ''}${r.upErr ? `<span class="qpu-tag bad">❌ ${esc(r.upErr)}</span>` : ''}</td>
         <td>${r.serial ? '' : `<button class="qpu-x" data-rm="${S.rows.indexOf(r)}" title="شيله ومايرجعش تاني">✕</button>`}</td></tr>`).join('')}</table></div>`;
   }
+
+  /* ---------- 📍 مكانه في السيستم: #/qp-upload ---------- */
+  const isQ = () => (location.hash.replace('#/', '') || 'home').split('/')[0] === 'qp-upload';
+  function getRoot(){ const main = document.getElementById('main'); if(!main) return null;
+    let r = document.getElementById('qpu-root'); if(!r || !main.contains(r)){ main.innerHTML = '<div id="qpu-root"></div>'; r = document.getElementById('qpu-root'); } return r; }
+  let started = false;
   function draw(){
     if(!isQ()) return;
-    ROOT = getRoot(); if(!ROOT) return;
-    const keep = {}; ['qpuU', 'qpuP', 'qpuL', 'qpuS', 'qpuT', 'qpuN'].forEach(id => { const e = document.getElementById(id); if(e) keep[id] = e.value; });
+    const ROOT = getRoot(); if(!ROOT) return;
+    const keep = {}; ['qpuU', 'qpuP', 'qpuU2', 'qpuP2', 'qpuS', 'qpuT', 'qpuN', 'qpuD'].forEach(id => { const e = document.getElementById(id); if(e) keep[id] = e.value; });
     ROOT.innerHTML = view();
     Object.entries(keep).forEach(([id, v]) => { const e = document.getElementById(id); if(e) e.value = v; });
-    const $ = id => document.getElementById(id), saveCfg = () => { S.cfg = { ...S.cfg, sheet:($('qpuS') || {}).value ?? S.cfg.sheet, tab:($('qpuT') || {}).value ?? S.cfg.tab, notes:($('qpuN') || {}).value ?? S.cfg.notes, acctLabel:($('qpuL') || {}).value ?? S.cfg.acctLabel }; sv(LS.cfg, S.cfg); };
-    ['qpuS', 'qpuT', 'qpuN', 'qpuL'].forEach(id => { const e = $(id); if(e) e.onchange = () => { saveCfg(); if(id === 'qpuN' && S.rows) draw(); }; });
-    ROOT.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
-      const a = b.dataset.a; saveCfg();
-      if(a === 'login'){ const u = $('qpuU').value.trim(), p = $('qpuP').value; if(!u || !p) return msg('اكتب اليوزر والباسورد.', 'err'); S.creds = { u, p }; if($('qpuRem').checked) sv(LS.creds, S.creds); else localStorage.removeItem(LS.creds); S.tok = null; await connect(); }
-      if(a === 'logout'){ S.tok = null; S.acct = null; S.creds = null; localStorage.removeItem(LS.creds); msg('اكتب بيانات الأكونت الجديد.', 'info'); }
+    const $ = id => document.getElementById(id);
+    const saveCfg = () => { S.cfg = { ...S.cfg, sheet:($('qpuS') || {}).value ?? S.cfg.sheet, tab:($('qpuT') || {}).value ?? S.cfg.tab, notes:($('qpuN') || {}).value ?? S.cfg.notes, days:Number(($('qpuD') || {}).value) || S.cfg.days || 30 }; sv(LS.cfg, S.cfg); };
+    ['qpuS', 'qpuT', 'qpuN', 'qpuD'].forEach(id => { const e = $(id); if(e) e.onchange = () => { saveCfg(); draw(); }; });
+    ROOT.querySelectorAll('[data-a]').forEach(b => b.onclick = async ev => {
+      ev.preventDefault(); const a = b.dataset.a; saveCfg();
+      if(a === 'login'){
+        if($('qpuU')){ const u = $('qpuU').value.trim(), p = $('qpuP').value; if(!u || !p) return msg('اكتب اليوزر والباسورد.', 'err'); S.creds = { u, p }; if($('qpuRem') && $('qpuRem').checked) sv(LS.creds, S.creds); else localStorage.removeItem(LS.creds); }
+        if($('qpuU2') && $('qpuU2').value.trim()){ S.creds2 = { u:$('qpuU2').value.trim(), p:$('qpuP2').value }; sv(LS.creds2, S.creds2); }
+        S.tok = null; S.tok2 = null; S.showSite = false; await connect(); }
+      if(a === 'site'){ S.showSite = true; draw(); }
+      if(a === 'logout'){ S.tok = null; S.tok2 = null; S.acct = null; S.creds = null; S.creds2 = null; localStorage.removeItem(LS.creds); localStorage.removeItem(LS.creds2); msg('اكتب بيانات الأكونت الجديد.', 'info'); }
       if(a === 'fetch') fetchSheet();
       if(a === 'map'){ S.showMap = !S.showMap; draw(); }
       if(a === 'upload') upload();
+      if(a === 'setptr'){ const n = Math.max(1, Number($('qpuPtr').value) || 1); if(!confirm(`المؤشر هيبقى عند سطر ${n}، يعني الجلب الجاي هيبدأ من سطر ${n + 1}. تكمل؟`)) return; setPtr(n); S.rows = null; S.dropped = []; msg(`📍 المؤشر بقى عند سطر ${n}.`, 'ok'); }
       if(a === 'csv'){ const L = S.rows.filter(r => r.serial); csvDownload(`QP ${ymd(new Date())} (${L.length}).csv`, [['رقم الشحنة', 'سطر في الشيت', 'الاسم', 'الموبايل', 'العنوان', 'المدينة', 'السعر', 'الطلب', 'notes'], ...L.map(r => [r.serial, r.line, r.name, '0' + phoneOf(r.phone), r.address, r.city, r.amount, r.contents, noteOf(r)])]); }
     });
     ROOT.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; draw(); });
     ROOT.querySelectorAll('[data-map]').forEach(s => s.onchange = () => { const sig = S.headers.join('|'); S.map[sig] = { ...(S.map[sig] || {}), [s.dataset.map]:s.value === '' ? '' : Number(s.value) }; sv(LS.map, S.map); });
     ROOT.querySelectorAll('[data-ed]').forEach(td => td.onblur = () => { const r = S.rows[+td.dataset.ed]; if(!r) return; const v = td.textContent.trim(); if(v === String(r[td.dataset.k])) return; r[td.dataset.k] = v; if(td.dataset.k === 'address') r.city = ''; check(r); dupCheck(); draw(); });
     ROOT.querySelectorAll('[data-city]').forEach(s => s.onchange = () => { const r = S.rows[+s.dataset.city]; r.city = s.value; check(r); draw(); });
-    ROOT.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { const r = S.rows[+b.dataset.rm]; if(!r || !confirm(`تشيل أوردر "${r.name}"؟ مش هيرجع تاني.`)) return; S.done.add(rowKey(r)); sv(LS.done, [...S.done]); S.rows.splice(+b.dataset.rm, 1); dupCheck(); draw(); });
+    ROOT.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { const r = S.rows[+b.dataset.rm]; if(!r || !confirm(`تشيل أوردر "${r.name}"؟ مش هيرجع تاني.`)) return; S.done.add(rowKey(r)); sv(LS.done, [...S.done]); S.rows.splice(+b.dataset.rm, 1); dupCheck(); advancePtr(); draw(); });
+    ROOT.querySelectorAll('[data-undrop]').forEach(b => b.onclick = () => { const r = S.dropped.splice(+b.dataset.undrop, 1)[0]; if(!r) return; S.done.delete(rowKey(r)); sv(LS.done, [...S.done]); S.rows.push(check(r)); S.rows.sort((a, b) => a.line - b.line); dupCheck(); S.tab = 'ready'; draw(); });
     ROOT.querySelectorAll('[data-hcsv]').forEach(b => b.onclick = () => { const x = S.hist[+b.dataset.hcsv]; csvDownload(`QP ${x.at.slice(0, 10)} (${x.n}).csv`, [['رقم الشحنة', 'سطر', 'الاسم', 'الموبايل', 'السعر'], ...x.orders.map(o => [o.serial, o.line, o.name, o.phone, o.amount])]); });
   }
   function mount(){
     document.querySelectorAll('#sidebar a.navlink').forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#/qp-upload'));
     draw(); if(!started && S.creds && S.creds.u){ started = true; connect(); }
   }
-  // الربط بالراوتر بتاع السيستم
   if(typeof render === 'function'){ const _render = render; render = function(){ _render.apply(this, arguments); if(isQ()) mount(); }; }
   window.addEventListener('hashchange', () => { if(isQ()) setTimeout(mount, 0); });
   if(isQ()) setTimeout(mount, 300);
 })();
 </script>
-<!-- ===================== نهاية بلوك رفع الأوردرات ===================== -->
+<!-- ===================== نهاية قسم رفع الأوردرات ===================== -->
 
 </body>
 </html>
