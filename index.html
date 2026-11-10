@@ -236,6 +236,7 @@ html:not(.auth-ok) #app{display:none}
     <div class="grp"><div class="grp-title">الأقسام</div>
       <a class="navlink" href="#/dept/warehouse">🏬 المخزن</a>
       <a class="navlink" href="#/accounts">💼 الحسابات</a>
+      <a class="navlink" href="#/qp-upload">📤 رفع الأوردرات</a>
     </div>
   </nav>
   <main id="main"></main>
@@ -297,12 +298,13 @@ function render(){
     const h = a.getAttribute('href');
     a.classList.toggle('active', h === '#/' + route || h === '#/' + route + '/' + (param || ''));
   });
-  // المخزن (#/dept/warehouse) والحسابات (#/accounts) بيرسموا نفسهم من البلوكات بتاعتهم تحت
-  if((route === 'dept' && param === 'warehouse') || route === 'accounts'){ main.innerHTML = ''; return; }
+  // المخزن (#/dept/warehouse) والحسابات (#/accounts) ورفع الأوردرات (#/qp-upload) بيرسموا نفسهم من البلوكات بتاعتهم تحت
+  if((route === 'dept' && param === 'warehouse') || route === 'accounts' || route === 'qp-upload'){ main.innerHTML = ''; return; }
   main.innerHTML = `<div class="pagehead"><h1>🏬 ${APP_CONFIG.APP_NAME}</h1><p>اختار القسم اللي هتشتغل عليه.</p></div>
     <div class="home-cards">
       <a class="card" href="#/dept/warehouse"><div class="ic">🏬</div><h3>المخزن</h3><p style="color:var(--muted);font-size:13.5px;margin:0">الأصناف، الإدخال والإخراج، الجرد، الحركات، ملخص اليوم والمشتريات.</p></a>
       <a class="card" href="#/accounts"><div class="ic">💼</div><h3>الحسابات</h3><p style="color:var(--muted);font-size:13.5px;margin:0">الإيرادات والمصروفات يوم بيوم، رصيد كل حساب، والتحويلات.</p></a>
+      <a class="card" href="#/qp-upload"><div class="ic">📤</div><h3>رفع الأوردرات</h3><p style="color:var(--muted);font-size:13.5px;margin:0">هات الأوردرات من شيت Google وارفعها على QP.</p></a>
     </div>`;
 }
 window.addEventListener('hashchange', render);
@@ -311,7 +313,7 @@ render();
 </script>
 <script>
 /* =====================================================================
-   🔐 بوابة الدخول + صلاحيات الأقسام (المخزن / الحسابات)
+   🔐 بوابة الدخول + صلاحيات الأقسام (المخزن / الحسابات / رفع الأوردرات)
    - الحساب الجديد مايشوفش أي قسم لحد ما الأدمن يديله صلاحيات
    - الأدمن بيتحكم من صفحة ⚙️ الحسابات والصلاحيات (#/admin)
    ===================================================================== */
@@ -321,11 +323,12 @@ render();
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-  /* ---------- الأقسام اللي الأدمن بيتحكم فيها (المخزن + الحسابات بس) ---------- */
+  /* ---------- الأقسام اللي الأدمن بيتحكم فيها ---------- */
   const GROUPS = () => [
     { title:'الأقسام', items:[
       { key:'dept:warehouse', label:'🏬 المخزن',   routes:[] },
-      { key:'accounts',       label:'💼 الحسابات', routes:['accounts'] } ]},
+      { key:'accounts',       label:'💼 الحسابات', routes:['accounts'] },
+      { key:'qp-upload',      label:'📤 رفع الأوردرات', routes:['qp-upload'] } ]},
   ];
   const allSections = () => GROUPS().flatMap(g => g.items);
 
@@ -2260,10 +2263,9 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
 
 </script>
 <!-- =====================================================================
-     📤 رفع الأوردرات من Google Sheet على QP — بلوك مستقل (انسخه كله مرة واحدة)
-     مكانه: جوه <body> في المكان اللي عايز القسم يظهر فيه. مش محتاج أي مكتبة ولا أي حاجة تانية.
+     📤 قسم رفع الأوردرات (Google Sheet ← QP) — بيظهر في الصفحة #/qp-upload جوه السيستم
+     مكانه: آخر حاجة قبل </body> (بعد سكريبت الحسابات)
      ===================================================================== -->
-<div id="qpu-root"></div>
 <style>
 #qpu-root{--qpu-ink:#1f2933;--qpu-mut:#6b7280;--qpu-line:#e3e6ea;--qpu-bg:#fff;--qpu-soft:#f5f7f9;--qpu-pri:#1f3d36;--qpu-ok:#2f7d55;--qpu-bad:#b3261e;--qpu-warn:#b7791f;
   font-family:'Cairo','Readex Pro',Tahoma,Arial,sans-serif;direction:rtl;color:var(--qpu-ink);max-width:1200px;margin:0 auto;font-size:14.5px}
@@ -2304,7 +2306,11 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
    - API بتاع QP: POST /integration/token  ·  GET /integration/cities  ·  POST /integration/order
    ============================================================================================ */
 (function(){
-  const ROOT = document.getElementById('qpu-root'); if(!ROOT) return;
+  // 📍 القسم بيترسم جوه #main لما تفتح #/qp-upload (زي المخزن والحسابات)
+  const isQ = () => (location.hash.replace('#/', '') || 'home').split('/')[0] === 'qp-upload';
+  function getRoot(){ const main = document.getElementById('main'); if(!main) return null;
+    let r = document.getElementById('qpu-root'); if(!r || !main.contains(r)){ main.innerHTML = '<div id="qpu-root"></div>'; r = document.getElementById('qpu-root'); } return r; }
+  let ROOT = null, started = false;
   const QPI = 'https://api.qpxpress.com/integration/';
   const LS = { cfg:'qpu_cfg', creds:'qpu_creds', done:'qpu_done', hist:'qpu_hist', map:'qpu_map' };
   const ld = (k, d) => { try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch(e){ return d; } };
@@ -2501,6 +2507,8 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
         <td>${r.serial ? '' : `<button class="qpu-x" data-rm="${S.rows.indexOf(r)}" title="شيله ومايرجعش تاني">✕</button>`}</td></tr>`).join('')}</table></div>`;
   }
   function draw(){
+    if(!isQ()) return;
+    ROOT = getRoot(); if(!ROOT) return;
     const keep = {}; ['qpuU', 'qpuP', 'qpuL', 'qpuS', 'qpuT', 'qpuN'].forEach(id => { const e = document.getElementById(id); if(e) keep[id] = e.value; });
     ROOT.innerHTML = view();
     Object.entries(keep).forEach(([id, v]) => { const e = document.getElementById(id); if(e) e.value = v; });
@@ -2522,10 +2530,17 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     ROOT.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { const r = S.rows[+b.dataset.rm]; if(!r || !confirm(`تشيل أوردر "${r.name}"؟ مش هيرجع تاني.`)) return; S.done.add(rowKey(r)); sv(LS.done, [...S.done]); S.rows.splice(+b.dataset.rm, 1); dupCheck(); draw(); });
     ROOT.querySelectorAll('[data-hcsv]').forEach(b => b.onclick = () => { const x = S.hist[+b.dataset.hcsv]; csvDownload(`QP ${x.at.slice(0, 10)} (${x.n}).csv`, [['رقم الشحنة', 'سطر', 'الاسم', 'الموبايل', 'السعر'], ...x.orders.map(o => [o.serial, o.line, o.name, o.phone, o.amount])]); });
   }
-  draw();
-  if(S.creds && S.creds.u) connect();
+  function mount(){
+    document.querySelectorAll('#sidebar a.navlink').forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#/qp-upload'));
+    draw(); if(!started && S.creds && S.creds.u){ started = true; connect(); }
+  }
+  // الربط بالراوتر بتاع السيستم
+  if(typeof render === 'function'){ const _render = render; render = function(){ _render.apply(this, arguments); if(isQ()) mount(); }; }
+  window.addEventListener('hashchange', () => { if(isQ()) setTimeout(mount, 0); });
+  if(isQ()) setTimeout(mount, 300);
 })();
 </script>
 <!-- ===================== نهاية بلوك رفع الأوردرات ===================== -->
+
 </body>
 </html>
