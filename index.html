@@ -765,7 +765,7 @@ table.pr tr.out td{background:#fff5f4}
   // بيوحّد أ/إ/آ = ا ، ة = ه ، ى = ي ، والأرقام العربي = إنجليزي، وبيدوّر بأكتر من كلمة
   const SEARCH_PH = '🔍 سيرش بار اهو عشان منعدش ندور كتير';
   const normQ = s => String(s ?? '').toLowerCase()
-    .replace(/[\u064B-\u0652\u0640]/g, '')
+    .replace(/[ً-ْـ]/g, '')
     .replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
     .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
     .replace(/\s+/g, ' ').trim();
@@ -2264,7 +2264,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
 </script>
 <!-- =====================================================================
      📤 قسم رفع الأوردرات (Google Sheet ← QP) — بيظهر في الصفحة #/qp-upload جوه السيستم
-     📍 مؤشر بيكمّل من آخر سطر · 🔁 مقارنة بالموبايل باللي على QP · 👤 اسم الأكونت من QP
+     📍 مؤشر بيقرا الشيت من تحت لفوق (الأوردرات الجديدة بتتكتب فوق) · 🔁 مقارنة بالموبايل باللي على QP · 👤 اسم الأكونت من QP
      ===================================================================== -->
 <style>
 #qpu-root{--qpu-ink:#1f2933;--qpu-mut:#6b7280;--qpu-line:#e3e6ea;--qpu-bg:#fff;--qpu-soft:#f5f7f9;--qpu-pri:#1f3d36;--qpu-ok:#2f7d55;--qpu-bad:#b3261e;--qpu-warn:#b7791f;
@@ -2301,14 +2301,19 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
 <script>
 /* ============================================================================================
    📤 رفع الأوردرات — بيجيب الأوردرات من شيت Google ويرفعها على أكونت QP
-   - 📍 مؤشر: بيكمّل من بعد آخر سطر في الشيت اتاخد (مش بيقرا الشيت كله كل مرة)
+   - 📍 المؤشر بيشتغل من تحت لفوق: الأوردرات الجديدة بتتكتب في أول الشيت (فوق)،
+        فالمؤشر بيعدّ "كام سطر من تحت اتاخد"، والجلب الجاي بيجيب اللي فوقهم بس.
+        (العدّ من تحت مش بيتأثر لما سطور جديدة تتحط فوق، عكس رقم السطر اللي بيتزحلق)
    - 🔁 قبل الرفع بيقارن بالموبايل بكل اللي على QP في آخر كام يوم، واللي مرفوع بالفعل بيتشال لوحده
    - 👤 اسم الأكونت بيتجاب من QP نفسه وبيظهر قبل أي رفع
+   - 🚀 الرفع بيبدأ بالأقدم (اللي تحت) وطالع لفوق
    - API: integration/token + cities + order (للرفع) · api/token + addorders/order + settings (للمقارنة واسم الأكونت)
    ============================================================================================ */
 (function(){
   const QP = 'https://api.qpxpress.com', QPI = QP + '/integration/';
-  const LS = { cfg:'qpu_cfg', creds:'qpu_creds', creds2:'qpu_creds2', done:'qpu_done', hist:'qpu_hist', map:'qpu_map', ptr:'qpu_ptr' };
+  // ptr: مفتاح جديد (qpu_ptr_bottom) لأن المؤشر بقى بيتعدّ من تحت — مختلف عن المؤشر القديم اللي كان رقم سطر من فوق
+  // done: مفتاح جديد كمان لأن الأوردر بقى بيتعرّف بمكانه من تحت مش رقم سطره
+  const LS = { cfg:'qpu_cfg', creds:'qpu_creds', creds2:'qpu_creds2', done:'qpu_done_b', hist:'qpu_hist', map:'qpu_map', ptr:'qpu_ptr_bottom' };
   const ld = (k, d) => { try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch(e){ return d; } };
   const sv = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -2324,7 +2329,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
 
   const S = { cfg:ld(LS.cfg, { sheet:'', tab:'', notes:'', days:30 }), creds:ld(LS.creds, null), creds2:ld(LS.creds2, null),
     tok:null, tok2:null, acct:null, cities:null, rows:null, dropped:[], msg:'', msgT:'', busy:false, prog:'', tab:'ready',
-    done:new Set(ld(LS.done, [])), hist:ld(LS.hist, []), headers:null, map:ld(LS.map, {}), ptrs:ld(LS.ptr, {}), showMap:false, showSite:false };
+    done:new Set(ld(LS.done, [])), hist:ld(LS.hist, []), headers:null, map:ld(LS.map, {}), ptrs:ld(LS.ptr, {}), total:0, showMap:false, showSite:false };
 
   /* ---------- 🔐 QP ---------- */
   const jwt = t => { try{ return JSON.parse(decodeURIComponent(escape(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))))); }catch(e){ return {}; } };
@@ -2410,7 +2415,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     return idx;
   }
 
-  /* ---------- 📄 الشيت + 📍 المؤشر ---------- */
+  /* ---------- 📄 الشيت + 📍 المؤشر (من تحت لفوق) ---------- */
   function sheetUrl(){
     const v = String(S.cfg.sheet || '').trim(); if(!v) return null;
     if(/output=csv|tqx=out:csv/.test(v)) return v;
@@ -2419,8 +2424,11 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     return `https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv` + (S.cfg.tab ? '&sheet=' + encodeURIComponent(S.cfg.tab) : gid ? '&gid=' + gid : '');
   }
   const sheetKey = () => { const u = sheetUrl() || ''; return (u.match(/\/d\/([a-zA-Z0-9-_]+)/) || [u])[1] + '|' + (S.cfg.tab || (u.match(/gid=(\d+)/) || [])[1] || ''); };
-  const P = () => S.ptrs[sheetKey()] || { line:1, at:null };   // سطر 1 = العناوين
-  function setPtr(line){ S.ptrs[sheetKey()] = { line, at:new Date().toISOString() }; sv(LS.ptr, S.ptrs); }
+  // taken = عدد السطور اللي اتاخدت من تحت الشيت (0 = لسه ماخدش حاجة)
+  const P = () => S.ptrs[sheetKey()] || { taken:0, at:null };
+  function setPtr(taken){ S.ptrs[sheetKey()] = { taken, at:new Date().toISOString() }; sv(LS.ptr, S.ptrs); }
+  // رقم السطر في الشيت لسطر مكانه b من تحت (محتاج إجمالي السطور من آخر جلب)
+  const lineOfB = b => S.total ? S.total + 2 - b : null;
   function parseCSV(t){
     const rows = []; let row = [], cur = '', q = false;
     for(let i = 0; i < t.length; i++){ const c = t[i];
@@ -2434,7 +2442,8 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     ['amount', 'السعر (المطلوب تحصيله)', /(total|price|amount|سعر|اجمالي|إجمالي|المبلغ|تحصيل)/i], ['contents', 'الطلب / المحتوى', /(content|product|item|order|الطلب|المنتج|المحتوي|الاوردر)/i],
     ['notes', 'notes (اختياري)', /(note|ملاحظ|براند|brand)/i], ['id', 'رقم الأوردر في الشيت (اختياري)', /^(id|order ?id|#|رقم الاوردر|رقم الطلب|كود)$/i] ];
   function autoMap(H){ const m = {}, used = new Set(); FIELDS.forEach(([k, , re]) => { const i = H.findIndex((h, ix) => !used.has(ix) && re.test(String(h).trim())); if(i >= 0){ m[k] = i; used.add(i); } }); return m; }
-  const rowKey = r => sheetKey() + '#' + (r.id ? 'id:' + r.id : 'L' + r.line);
+  // الأوردر بيتعرّف بمكانه من تحت (b) — ثابت حتى لو اتكتبت سطور جديدة فوقه
+  const rowKey = r => sheetKey() + '#' + (r.id ? 'id:' + r.id : 'B' + r.b);
   function check(r){
     r.errs = [];
     if(!String(r.name).trim()) r.errs.push('الاسم فاضي');
@@ -2459,10 +2468,11 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
       const H = A[0].map(x => String(x).trim()); S.headers = H;
       const sig = H.join('|'); if(!S.map[sig]){ S.map[sig] = autoMap(H); sv(LS.map, S.map); }
       const M = S.map[sig], g = (row, k) => M[k] !== undefined && M[k] !== '' ? String(row[M[k]] ?? '').trim() : '';
-      const ptr = P().line;
-      // 📍 بيكمّل من بعد المؤشر بس
-      const after = A.slice(1).map((row, i) => ({ line:i + 2, id:g(row, 'id'), name:g(row, 'name'), phone:g(row, 'phone'), phone2:g(row, 'phone2'), address:g(row, 'address'), cityRaw:g(row, 'city'), city:'',
-        amount:g(row, 'amount'), contents:g(row, 'contents'), notes:g(row, 'notes') })).filter(x => x.line > ptr && (x.name || x.phone || x.contents));
+      const n = A.length - 1; S.total = n;          // عدد سطور البيانات (من غير العناوين)
+      const ptr = Math.min(P().taken, n);           // كام سطر اتاخد من تحت
+      // 📍 بيقرا من تحت لفوق: b = مكان السطر من تحت (آخر سطر = 1). بياخد بس اللي فوق المؤشر (b > ptr)
+      const after = A.slice(1).map((row, i) => ({ line:i + 2, b:n - i, id:g(row, 'id'), name:g(row, 'name'), phone:g(row, 'phone'), phone2:g(row, 'phone2'), address:g(row, 'address'), cityRaw:g(row, 'city'), city:'',
+        amount:g(row, 'amount'), contents:g(row, 'contents'), notes:g(row, 'notes') })).filter(x => x.b > ptr && (x.name || x.phone || x.contents));
       const fresh = after.filter(x => !S.done.has(rowKey(x)));
       if(S.cities) fresh.forEach(x => { const c = guessCity(x.cityRaw); if(c) x.city = c; });
       // 🔁 المقارنة بـ QP بالموبايل
@@ -2471,26 +2481,27 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
       fresh.forEach(x => { const L = [x.phone, x.phone2].map(phoneOf).filter(Boolean).flatMap(k => idx[k] || []); if(L.length){ x.qp = L[0]; drop.push(x); } else keep.push(x); });
       drop.forEach(x => S.done.add(rowKey(x))); sv(LS.done, [...S.done].slice(-30000));
       S.dropped = drop; S.rows = keep.map(check); dupCheck(); S.tab = 'ready';
-      advancePtr(A.length);
-      msg(`📥 من بعد السطر ${ptr}: ${fresh.length} أوردر — ✅ ${keep.length} لسه ماترفعوش${drop.length ? ` · 🔁 شلت ${drop.length} لأنهم مرفوعين بالفعل على QP (آخر ${S.cfg.days} يوم)` : ''}.`, 'ok');
+      advancePtr();
+      msg(`📥 من تحت لفوق — بعد آخر ${ptr} سطر اتاخدوا (يعني من سطر ${n + 1 - ptr} وطالع): ${fresh.length} أوردر — ✅ ${keep.length} لسه ماترفعوش${drop.length ? ` · 🔁 شلت ${drop.length} لأنهم مرفوعين بالفعل على QP (آخر ${S.cfg.days} يوم)` : ''}.`, 'ok');
     }catch(e){ msg(e.message === 'SITE_BAD' ? 'QP رفض دخول الموقع — اتأكد من بيانات دخول موقع QP.' : /Failed to fetch/i.test(e.message) ? 'مش قادر يوصل للشيت أو لـ QP — اتأكد إن الشيت متشارك "Anyone with the link can view".' : e.message, 'err'); }
     S.busy = false; S.prog = ''; draw();
   }
-  // 📍 المؤشر بيتقدّم على السطور المتتالية اللي اتاخدت (اترفعت / اتشالت / كانت على QP)
-  function advancePtr(lastLine){
-    if(lastLine) S.lastLine = lastLine;
-    let line = P().line;
-    const pending = new Set((S.rows || []).filter(r => !r.serial).map(r => r.line));
-    const maxLine = Math.max(line, S.lastLine || 0, ...[...(S.rows || []), ...(S.dropped || [])].map(r => r.line));
-    while(line < maxLine){ const nx = line + 1; if(pending.has(nx)) break; line = nx; }
-    if(line !== P().line) setPtr(line);
+  // 📍 المؤشر بيطلع لفوق على السطور المتتالية اللي اتاخدت (اترفعت / اتشالت / كانت على QP)
+  //    وبيقف عند أول أوردر لسه مستني الرفع
+  function advancePtr(){
+    let k = P().taken;
+    const pending = new Set((S.rows || []).filter(r => !r.serial).map(r => r.b));
+    const maxB = Math.max(k, S.total || 0);
+    while(k < maxB){ const nx = k + 1; if(pending.has(nx)) break; k = nx; }
+    if(k !== P().taken) setPtr(k);
   }
 
   /* ---------- 🚀 الرفع ---------- */
   const ready = () => (S.rows || []).filter(r => !r.serial && !r.errs.length);
   const noteOf = r => String(r.notes || S.cfg.notes || '').trim();
   async function upload(){
-    const L = ready(); if(!L.length) return;
+    // الأقدم الأول: اللي تحت في الشيت (b أصغر) بيترفع الأول
+    const L = ready().slice().sort((a, b) => a.b - b.b); if(!L.length) return;
     if(!S.tok){ await connect(); if(!S.tok) return; }
     await loadAccount().catch(() => {});
     const total = L.reduce((a, r) => a + (numOf(r.amount) || 0), 0);
@@ -2511,18 +2522,24 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     const up = L.filter(r => r.serial);
     if(up.length){ S.hist.unshift({ at:new Date().toISOString(), acct:acctName(), n:up.length, total:up.reduce((a, r) => a + (numOf(r.amount) || 0), 0), orders:up.map(r => ({ serial:r.serial, name:r.name, phone:r.phone, amount:r.amount, line:r.line })) }); S.hist = S.hist.slice(0, 50); sv(LS.hist, S.hist); }
     S.busy = false; S.prog = '';
-    msg(`✅ اترفع ${ok} أوردر على ${acctName()}${fail ? ` — ❌ ${fail} مارفعوش (السبب مكتوب جنب كل واحد)` : ''}. 📍 المؤشر بقى عند سطر ${P().line}.`, fail ? 'err' : 'ok'); S.tab = fail ? 'bad' : 'done'; draw();
+    msg(`✅ اترفع ${ok} أوردر على ${acctName()}${fail ? ` — ❌ ${fail} مارفعوش (السبب مكتوب جنب كل واحد)` : ''}. 📍 المؤشر بقى: اتاخد آخر ${P().taken} سطر من تحت.`, fail ? 'err' : 'ok'); S.tab = fail ? 'bad' : 'done'; draw();
   }
   function csvDownload(name, rows){
     const s = rows.map(r => r.map(v => { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(',')).join('\n');
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + s], { type:'text/csv;charset=utf-8' })); a.download = name; a.click();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + s], { type:'text/csv;charset=utf-8' })); a.download = name; a.click();
   }
 
   /* ---------- 🖥️ الشاشة ---------- */
   function msg(t, k){ S.msg = t; S.msgT = k || 'info'; draw(); }
+  function ptrText(){
+    const p = P();
+    if(!p.taken) return '<b>📍 المؤشر لسه في آخر الشيت</b> — هيبدأ يجيب من آخر سطر تحت وطالع لفوق';
+    const top = lineOfB(p.taken);
+    return `<b>📍 اتاخد آخر ${p.taken} سطر من تحت</b>` + (top ? ` (لحد سطر ${top}) — الجلب الجاي هيجيب من سطر ${top - 1} وطالع لفوق` : ' — الجلب الجاي هيجيب اللي فوقهم');
+  }
   function view(){
     const c = S.cfg, cr = S.creds || {}, c2 = S.creds2 || {};
-    let h = `<div class="qpu-card"><h2>📤 رفع الأوردرات على QP</h2><p style="margin:0;color:var(--qpu-mut)">بيكمّل من بعد آخر سطر اتاخد في الشيت، وبيشيل أي أوردر رقمه موجود بالفعل على QP، وبعدين ترفع الباقي.</p></div>`;
+    let h = `<div class="qpu-card"><h2>📤 رفع الأوردرات على QP</h2><p style="margin:0;color:var(--qpu-mut)">بيقرا الشيت من تحت لفوق (الأوردرات الجديدة بتتكتب فوق)، وبيكمّل من بعد آخر سطر اتاخد، وبيشيل أي أوردر رقمه موجود بالفعل على QP، وبعدين ترفع الباقي.</p></div>`;
     if(S.msg) h += `<div class="qpu-msg ${S.msgT}">${esc(S.msg)}</div>`;
     h += `<div class="qpu-card"><h3>1️⃣ أكونت QP</h3>${S.tok ? `<div class="qpu-row"><span class="qpu-acct">👤 متصل بأكونت: ${esc(acctName())}${S.acct && S.acct.fromQP ? ' <small style="font-weight:400">(الاسم من QP)</small>' : ''}</span>
         ${S.siteOk ? '<span class="qpu-tag ok">🔁 المقارنة بـ QP شغالة</span>' : '<span class="qpu-tag bad">⚠️ المقارنة بـ QP مش شغالة</span>'}<button class="qpu-btn" data-a="logout">🔄 غيّر الأكونت</button></div>` : ''}
@@ -2534,8 +2551,8 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     h += `<div class="qpu-card"><h3>2️⃣ الشيت</h3><div class="qpu-grid"><div style="grid-column:1/-1"><label>رابط Google Sheet (لازم يكون "Anyone with the link can view")</label><input id="qpuS" value="${esc(c.sheet)}" placeholder="https://docs.google.com/spreadsheets/d/..../edit#gid=0" style="direction:ltr"></div>
       <div><label>اسم التاب (اختياري)</label><input id="qpuT" value="${esc(c.tab)}" placeholder="Sheet1"></div><div><label>notes الافتراضية</label><input id="qpuN" value="${esc(c.notes)}" placeholder="مثلاً: brand x"></div>
       <div><label>قارن باللي على QP في آخر (يوم)</label><input id="qpuD" type="number" min="1" value="${esc(c.days || 30)}"></div></div>
-      ${sheetUrl() ? `<div class="qpu-row" style="margin-top:10px;padding:8px 12px;border-radius:10px;background:var(--qpu-soft)">📍 <b>المؤشر واقف عند سطر ${p.line}</b>${p.line <= 1 ? ' (هيبدأ من أول الشيت)' : ` — هيجيب من سطر ${p.line + 1} ورايح`}${p.at ? ` <span style="color:var(--qpu-mut);font-size:12.5px">· اتحرّك ${esc(when(p.at))}</span>` : ''}
-        <span style="flex:1"></span><label style="margin:0;display:flex;gap:6px;align-items:center">غيّره لسطر <input id="qpuPtr" type="number" min="1" value="${p.line}" style="width:90px"></label><button class="qpu-btn" data-a="setptr" style="padding:6px 12px">💾</button></div>` : ''}
+      ${sheetUrl() ? `<div class="qpu-row" style="margin-top:10px;padding:8px 12px;border-radius:10px;background:var(--qpu-soft)">${ptrText()}${p.at ? ` <span style="color:var(--qpu-mut);font-size:12.5px">· اتحرّك ${esc(when(p.at))}</span>` : ''}
+        <span style="flex:1"></span><label style="margin:0;display:flex;gap:6px;align-items:center">عدد السطور اللي اتاخدت من تحت <input id="qpuPtr" type="number" min="0" value="${p.taken}" style="width:90px"></label><button class="qpu-btn" data-a="setptr" style="padding:6px 12px">💾</button></div>` : ''}
       <div class="qpu-row" style="margin-top:10px"><button class="qpu-btn pri" data-a="fetch" ${S.busy ? 'disabled' : ''}>${S.busy && !S.prog.startsWith('بيرفع') ? '⏳ ' + esc(S.prog || 'بيجيب...') : '📥 هات الأوردرات الجديدة'}</button>${S.headers ? '<button class="qpu-btn" data-a="map">🧩 الأعمدة</button>' : ''}</div>
       ${S.showMap && S.headers ? mapHtml() : ''}</div>`;
     if(S.rows){
@@ -2547,7 +2564,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
           ${dn.length ? '<button class="qpu-btn" data-a="csv">⬇️ نزّل اللي اترفع (CSV)</button>' : ''}</div>
         <div class="qpu-tabs">${[['ready', `✅ جاهزة (${rd.length})`], ['bad', `⚠️ فيها مشاكل (${bad.length})`], ['qp', `🔁 على QP بالفعل (${(S.dropped || []).length})`], ['done', `📦 اترفعت (${dn.length})`]].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
         ${S.tab === 'qp' ? qpTable() : tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
-        <p style="font-size:12.5px;color:var(--qpu-mut);margin:8px 0 0">💡 تقدر تعدّل أي خانة بالضغط عليها. ✕ بيشيل الأوردر ومايرجعش. 📍 المؤشر بيتحرك لوحده بعد الرفع لحد أول أوردر لسه مستني.</p></div>`;
+        <p style="font-size:12.5px;color:var(--qpu-mut);margin:8px 0 0">💡 تقدر تعدّل أي خانة بالضغط عليها. ✕ بيشيل الأوردر ومايرجعش. 🚀 الرفع بيبدأ بالأقدم (اللي تحت). 📍 المؤشر بيطلع لفوق لوحده بعد الرفع لحد أول أوردر لسه مستني.</p></div>`;
     }
     if(S.hist.length) h += `<div class="qpu-card"><details><summary>🕒 سجل الرفع (${S.hist.length})</summary><div class="qpu-tw" style="margin-top:8px"><table><tr><th>إمتى</th><th>الأكونت</th><th>عدد</th><th>إجمالي</th><th></th></tr>
       ${S.hist.map((x, i) => `<tr><td>${esc(new Date(x.at).toLocaleString('ar-EG'))}</td><td>${esc(x.acct || '')}</td><td>${x.n}</td><td>${Number(x.total || 0).toLocaleString('ar-EG')}</td><td><button class="qpu-btn" data-hcsv="${i}" style="padding:4px 10px">⬇️ CSV</button></td></tr>`).join('')}</table></div></details></div>`;
@@ -2600,7 +2617,11 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
       if(a === 'fetch') fetchSheet();
       if(a === 'map'){ S.showMap = !S.showMap; draw(); }
       if(a === 'upload') upload();
-      if(a === 'setptr'){ const n = Math.max(1, Number($('qpuPtr').value) || 1); if(!confirm(`المؤشر هيبقى عند سطر ${n}، يعني الجلب الجاي هيبدأ من سطر ${n + 1}. تكمل؟`)) return; setPtr(n); S.rows = null; S.dropped = []; msg(`📍 المؤشر بقى عند سطر ${n}.`, 'ok'); }
+      if(a === 'setptr'){
+        const n = Math.max(0, Math.floor(Number($('qpuPtr').value) || 0)), top = lineOfB(n);
+        if(!confirm(n ? `المؤشر هيعتبر إن آخر ${n} سطر من تحت اتاخدوا${top ? ` (لحد سطر ${top})` : ''}، والجلب الجاي هيبدأ من السطر اللي فوقهم وطالع. تكمل؟` : 'المؤشر هيرجع لآخر الشيت، والجلب الجاي هيقرا الشيت كله من تحت لفوق. تكمل؟')) return;
+        setPtr(n); S.rows = null; S.dropped = []; msg(n ? `📍 المؤشر بقى: اتاخد آخر ${n} سطر من تحت.` : '📍 المؤشر رجع لآخر الشيت.', 'ok');
+      }
       if(a === 'csv'){ const L = S.rows.filter(r => r.serial); csvDownload(`QP ${ymd(new Date())} (${L.length}).csv`, [['رقم الشحنة', 'سطر في الشيت', 'الاسم', 'الموبايل', 'العنوان', 'المدينة', 'السعر', 'الطلب', 'notes'], ...L.map(r => [r.serial, r.line, r.name, '0' + phoneOf(r.phone), r.address, r.city, r.amount, r.contents, noteOf(r)])]); }
     });
     ROOT.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; draw(); });
