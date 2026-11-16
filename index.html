@@ -2535,7 +2535,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     }
     sv(LS.done, [...S.done].slice(-30000)); advancePtr();
     const up = L.filter(r => r.serial);
-    if(up.length){ S.hist.unshift({ at:new Date().toISOString(), acct:acctName(), n:up.length, total:up.reduce((a, r) => a + (numOf(r.amount) || 0), 0), orders:up.map(r => ({ serial:r.serial, name:r.name, phone:r.phone, amount:r.amount, line:r.line })) }); S.hist = S.hist.slice(0, 50); sv(LS.hist, S.hist); }
+    if(up.length){ S.hist.unshift({ at:new Date().toISOString(), acct:acctName(), n:up.length, total:up.reduce((a, r) => a + (numOf(r.amount) || 0), 0), orders:up.map(r => ({ serial:r.serial, name:r.name, phone:r.phone, amount:r.amount, line:r.line, contents:r.contents })) }); S.hist = S.hist.slice(0, 50); sv(LS.hist, S.hist); }
     S.busy = false; S.prog = '';
     msg(`✅ اترفع ${ok} أوردر على ${acctName()}${fail ? ` — ❌ ${fail} مارفعوش (السبب مكتوب جنب كل واحد)` : ''}. 📍 المؤشر بقى: اتاخد آخر ${P().taken} سطر من تحت.`, fail ? 'err' : 'ok'); S.tab = fail ? 'bad' : 'done'; draw();
   }
@@ -2576,7 +2576,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
         <div class="qpu-kpi"><b style="color:var(--qpu-bad)">${bad.length}</b><span>⚠️ فيها مشاكل</span></div><div class="qpu-kpi"><b>${(S.dropped || []).length}</b><span>🔁 مرفوعة بالفعل على QP (اتشالت)</span></div>
         <div class="qpu-kpi"><b>${tot.toLocaleString('ar-EG')}</b><span>إجمالي الجاهزين (ج)</span></div><div class="qpu-kpi"><b>${dn.length}</b><span>📦 اترفعت دلوقتي</span></div></div>
                 <div class="qpu-tabs">${[['ready', `✅ جاهزة (${rd.length})`], ['bad', `⚠️ فيها مشاكل (${bad.length})`], ['dup', `🔁 متكررة (${dupGroups().reduce((a, g) => a + g.length, 0)})`], ['qp', `🔁 على QP بالفعل (${(S.dropped || []).length})`], ['done', `📦 اترفعت (${dn.length})`]].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
-        ${S.tab === 'qp' ? qpTable() : S.tab === 'dup' ? dupHtml() : (S.tab === 'done' ? sumHtml(dn, 'ملخص القطع اللي اترفعت (عشان تشيلها من المخزن)') : S.tab === 'ready' ? sumHtml(rd, 'ملخص القطع الجاهزة للرفع') : '') + tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
+        ${S.tab === 'qp' ? qpTable() : S.tab === 'dup' ? dupHtml() : (S.tab === 'done' ? todayHtml() + sumHtml(dn, 'ملخص القطع اللي اترفعت في الجلسة دي') : S.tab === 'ready' ? sumHtml(rd, 'ملخص القطع الجاهزة للرفع') : '') + tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
         <div class="qpu-row"><button class="qpu-btn ok" data-a="upload" ${!rd.length || S.busy ? 'disabled' : ''}>${S.prog.startsWith('بيرفع') ? '⏳ ' + esc(S.prog) : `🚀 ارفع الـ ${rd.length} الجاهزين على QP`}</button><span style="font-size:13px;color:var(--qpu-mut)">على أكونت: <b>${esc(acctName())}</b></span>
           ${dn.length ? '<button class="qpu-btn" data-a="csv">⬇️ نزّل اللي اترفع (CSV)</button>' : ''}</div>
         <p style="font-size:12.5px;color:var(--qpu-mut);margin:8px 0 0">💡 تقدر تعدّل أي خانة بالضغط عليها. ✕ بيشيل الأوردر ومايرجعش. 🚀 الرفع بيبدأ بالأقدم (اللي تحت). 📍 المؤشر بيطلع لفوق لوحده بعد الرفع لحد أول أوردر لسه مستني.</p></div>`;
@@ -2630,6 +2630,41 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
       <div class="qpu-tw"><table><tr><th>المقاس</th><th>الصنف</th><th>الكمية</th></tr>
       ${list.map(x => `<tr><td>مقاس ${esc(x.size)}</td><td style="text-align:right">${esc(x.label)}</td><td><b>${qn(x.qty)}</b> قطعة</td></tr>`).join('')}
       <tr><td colspan="2" style="text-align:right"><b>الإجمالي</b></td><td><b>${qn(total)}</b> قطعة</td></tr></table></div></div>`;
+  }
+  // 📅 كل الأوردرات اللي اترفعت النهارده من السجل (حتى من جلسات قبل كده)
+  function todayOrders(){
+    const t = ymd(new Date());
+    return (S.hist || []).filter(x => ymd(new Date(x.at)) === t)
+      .flatMap(x => (x.orders || []).map(o => ({ ...o, at: x.at, acct: x.acct })));
+  }
+  function todayHtml(){
+    const L = todayOrders(); if(!L.length) return '';
+    const old = L.filter(o => !o.contents).length;
+    return `<div class="qpu-card" style="margin-bottom:12px;border-color:var(--qpu-pri)"><h3>📅 اللي اترفع النهارده: ${L.length} أوردر</h3>
+      ${old ? `<p style="font-size:12.5px;color:var(--qpu-mut);margin:0 0 8px">⚠️ ${old} أوردر اترفع قبل التحديث ده، فمفيش تفاصيل قطع ليهم.</p>` : ''}
+      ${sumHtml(L, 'ملخص القطع اللي اترفعت النهارده')}
+      <div class="qpu-row"><button class="qpu-btn" data-a="daycsv">⬇️ نزّل ملخص النهارده (CSV)</button></div></div>`;
+  }
+  function dayCsv(){
+    const L = todayOrders(); if(!L.length) return;
+    const qn = v => Number(v);
+    const rows = [['رقم الشحنة', 'الوقت', 'الاسم', 'الموبايل', 'الصنف', 'المقاس', 'الكمية']];
+    const G = {};
+    L.forEach(o => {
+      const tm = new Date(o.at).toLocaleTimeString('ar-EG', { hour:'2-digit', minute:'2-digit' });
+      const items = parseItems(o.contents);
+      if(!items.length) rows.push([o.serial, tm, o.name, '0' + phoneOf(o.phone), '—', '', '']);
+      items.forEach(it => {
+        rows.push([o.serial, tm, o.name, '0' + phoneOf(o.phone), it.label, it.size, qn(it.qty)]);
+        const k = it.size + '|' + it.label; if(!G[k]) G[k] = { size: it.size, label: it.label, qty: 0 }; G[k].qty += it.qty;
+      });
+    });
+    const list = Object.values(G).sort((a, b) => (Number(a.size) || 999) - (Number(b.size) || 999) || a.label.localeCompare(b.label, 'ar'));
+    rows.push([]);
+    rows.push(['ملخص حسب المقاس والصنف', '', '', '', '', 'المقاس', 'الكمية']);
+    list.forEach(x => rows.push(['', '', '', '', x.label, x.size, qn(x.qty)]));
+    rows.push(['', '', '', '', 'الإجمالي', '', qn(list.reduce((a, x) => a + x.qty, 0))]);
+    csvDownload(`QP اليوم ${ymd(new Date())} (${L.length} أوردر).csv`, rows);
   }
   function brkHtml(r){
     const L = parseItems(r.contents); if(!L.length) return '—';
@@ -2686,6 +2721,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
         if(!confirm(n ? `المؤشر هيعتبر إن آخر ${n} سطر من تحت اتاخدوا${top ? ` (لحد سطر ${top})` : ''}، والجلب الجاي هيبدأ من السطر اللي فوقهم وطالع. تكمل؟` : 'المؤشر هيرجع لآخر الشيت، والجلب الجاي هيقرا الشيت كله من تحت لفوق. تكمل؟')) return;
         setPtr(n); S.rows = null; S.dropped = []; msg(n ? `📍 المؤشر بقى: اتاخد آخر ${n} سطر من تحت.` : '📍 المؤشر رجع لآخر الشيت.', 'ok');
       }
+      if(a === 'daycsv') dayCsv();
       if(a === 'csv'){ const L = S.rows.filter(r => r.serial); csvDownload(`QP ${ymd(new Date())} (${L.length}).csv`, [['رقم الشحنة', 'سطر في الشيت', 'الاسم', 'الموبايل', 'العنوان', 'المدينة', 'السعر', 'الطلب', 'notes'], ...L.map(r => [r.serial, r.line, r.name, '0' + phoneOf(r.phone), r.address, r.city, r.amount, r.contents, noteOf(r)])]); }
     });
     ROOT.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; draw(); });
