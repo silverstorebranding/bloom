@@ -2313,7 +2313,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
   const QP = 'https://api.qpxpress.com', QPI = QP + '/integration/';
   // ptr: مفتاح جديد (qpu_ptr_bottom) لأن المؤشر بقى بيتعدّ من تحت — مختلف عن المؤشر القديم اللي كان رقم سطر من فوق
   // done: مفتاح جديد كمان لأن الأوردر بقى بيتعرّف بمكانه من تحت مش رقم سطره
-  const LS = { cfg:'qpu_cfg', creds:'qpu_creds', creds2:'qpu_creds2', done:'qpu_done_b', hist:'qpu_hist', map:'qpu_map3', ptr:'qpu_ptr_bottom' }; // qpu_map3: الماب القديم (qpu_map / qpu_map2) كان متخزن غلط وحط التاريخ مكان الطلب، فالمفتاح اتغيّر عشان الأعمدة تتحسب من جديد
+  const LS = { cfg:'qpu_cfg', creds:'qpu_creds', creds2:'qpu_creds2', done:'qpu_done_b', hist:'qpu_hist', map:'qpu_map4', ptr:'qpu_ptr_bottom' }; // qpu_map4: الماب القديم (qpu_map / qpu_map2) كان متخزن غلط وحط التاريخ مكان الطلب، فالمفتاح اتغيّر عشان الأعمدة تتحسب من جديد
   const ld = (k, d) => { try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch(e){ return d; } };
   const sv = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -2439,12 +2439,12 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
   }
   const FIELDS = [ ['name', 'الاسم', /^(name|full ?name|customer|الاسم|اسم العميل|العميل)/i], ['phone', 'الموبايل', /(phone|mobile|موبايل|تليفون|رقم|هاتف)/i],
     ['phone2', 'موبايل تاني (اختياري)', /(phone ?2|second|تاني|اخر|آخر)/i], ['address', 'العنوان', /(address|عنوان)/i], ['city', 'المحافظة / المدينة (اختياري)', /(city|gov|محافظ|مدينه|مدينة)/i],
-    ['amount', 'السعر (المطلوب تحصيله)', /(total|price|amount|سعر|اجمالي|إجمالي|المبلغ|تحصيل)/i], ['contents', 'الطلب / المحتوى', /(content|product|item|order|الطلب|المنتج|المحتوي|المحتوى|المكونات|المكونه|شحنته|الاوردر|الأوردر)/i],
+    ['amount', 'السعر (المطلوب تحصيله)', /(total|price|amount|سعر|اجمالي|إجمالي|المبلغ|تحصيل)/i], ['contents', 'الطلب / المحتوى', /(content|product|item|order|الطلب|المنتج|المحتوي|المحتوى|المكونات|المكونه|المطلوب|شحنه|شحنته|الاوردر|الأوردر)/i],
     ['notes', 'notes (اختياري)', /(note|ملاحظ|براند|brand)/i], ['id', 'رقم الأوردر في الشيت (اختياري)', /^(id|order ?id|#|رقم الاوردر|رقم الأوردر|رقم الطلب|كود)$/i] ];
   // ⛔ كلمات مينفعش تتحط في الخانة دي: "تاريخ الطلب" مايبقاش هو "الطلب"، و"رقم الأوردر" مايبقاش هو الموبايل
   const NOT = {
     phone:    /(الطلب|الاوردر|الأوردر|order|serial|رقم الشحنة|تاريخ|date|وقت)/i,
-    contents: /(تاريخ|date|time|وقت|ميعاد|يوم|^\s*(id|#)\s*$|order ?(id|no|num|number|serial)|رقم ?ال?(طلب|اوردر|أوردر))/i,
+    contents: /(تاريخ|date|time|وقت|ميعاد|يوم|رقم ?ال?شحن|^\s*(id|#)\s*$|order ?(id|no|num|number|serial)|رقم ?ال?(طلب|اوردر|أوردر))/i,
   };
   function autoMap(H){ const m = {}, used = new Set();
     FIELDS.forEach(([k, , re]) => {
