@@ -2510,7 +2510,9 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
   }
 
   /* ---------- 🚀 الرفع ---------- */
-  const ready = () => (S.rows || []).filter(r => !r.serial && !r.errs.length);
+  const ready = () => (S.rows || []).filter(r => !r.serial && !r.errs.length && !r.dup);
+  // 🔁 المتكرر (نفس الموبايل) مابيترفعش، وبيتجمّع في تاب "متكررة" تحت بعض
+  function dupGroups(){ const g = {}; (S.rows || []).filter(r => !r.serial && r.dup).forEach(r => { const k = phoneOf(r.phone); (g[k] = g[k] || []).push(r); }); return Object.values(g); }
   const noteOf = r => String(r.notes || S.cfg.notes || '').trim();
   async function upload(){
     // الأقدم الأول: اللي تحت في الشيت (b أصغر) بيترفع الأول
@@ -2569,14 +2571,14 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
       <div class="qpu-row" style="margin-top:10px"><button class="qpu-btn pri" data-a="fetch" ${S.busy ? 'disabled' : ''}>${S.busy && !S.prog.startsWith('بيرفع') ? '⏳ ' + esc(S.prog || 'بيجيب...') : '📥 هات الأوردرات الجديدة'}</button>${S.headers ? '<button class="qpu-btn" data-a="map">🧩 الأعمدة</button>' : ''}</div>
       ${S.showMap && S.headers ? mapHtml() : ''}</div>`;
     if(S.rows){
-      const R = S.rows, rd = ready(), bad = R.filter(r => !r.serial && r.errs.length), dn = R.filter(r => r.serial), tot = rd.reduce((a, r) => a + (numOf(r.amount) || 0), 0);
+      const R = S.rows, rd = ready(), bad = R.filter(r => !r.serial && r.errs.length && !r.dup), dn = R.filter(r => r.serial), tot = rd.reduce((a, r) => a + (numOf(r.amount) || 0), 0);
       h += `<div class="qpu-card"><h3>3️⃣ الأوردرات</h3><div class="qpu-kpis"><div class="qpu-kpi"><b style="color:var(--qpu-ok)">${rd.length}</b><span>✅ جاهزة للرفع</span></div>
         <div class="qpu-kpi"><b style="color:var(--qpu-bad)">${bad.length}</b><span>⚠️ فيها مشاكل</span></div><div class="qpu-kpi"><b>${(S.dropped || []).length}</b><span>🔁 مرفوعة بالفعل على QP (اتشالت)</span></div>
         <div class="qpu-kpi"><b>${tot.toLocaleString('ar-EG')}</b><span>إجمالي الجاهزين (ج)</span></div><div class="qpu-kpi"><b>${dn.length}</b><span>📦 اترفعت دلوقتي</span></div></div>
         <div class="qpu-row"><button class="qpu-btn ok" data-a="upload" ${!rd.length || S.busy ? 'disabled' : ''}>${S.prog.startsWith('بيرفع') ? '⏳ ' + esc(S.prog) : `🚀 ارفع الـ ${rd.length} الجاهزين على QP`}</button><span style="font-size:13px;color:var(--qpu-mut)">على أكونت: <b>${esc(acctName())}</b></span>
           ${dn.length ? '<button class="qpu-btn" data-a="csv">⬇️ نزّل اللي اترفع (CSV)</button>' : ''}</div>
-        <div class="qpu-tabs">${[['ready', `✅ جاهزة (${rd.length})`], ['bad', `⚠️ فيها مشاكل (${bad.length})`], ['qp', `🔁 على QP بالفعل (${(S.dropped || []).length})`], ['done', `📦 اترفعت (${dn.length})`]].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
-        ${S.tab === 'qp' ? qpTable() : tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
+        <div class="qpu-tabs">${[['ready', `✅ جاهزة (${rd.length})`], ['bad', `⚠️ فيها مشاكل (${bad.length})`], ['dup', `🔁 متكررة (${dupGroups().reduce((a, g) => a + g.length, 0)})`], ['qp', `🔁 على QP بالفعل (${(S.dropped || []).length})`], ['done', `📦 اترفعت (${dn.length})`]].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
+        ${S.tab === 'qp' ? qpTable() : S.tab === 'dup' ? dupHtml() : tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
         <p style="font-size:12.5px;color:var(--qpu-mut);margin:8px 0 0">💡 تقدر تعدّل أي خانة بالضغط عليها. ✕ بيشيل الأوردر ومايرجعش. 🚀 الرفع بيبدأ بالأقدم (اللي تحت). 📍 المؤشر بيطلع لفوق لوحده بعد الرفع لحد أول أوردر لسه مستني.</p></div>`;
     }
     if(S.hist.length) h += `<div class="qpu-card"><details><summary>🕒 سجل الرفع (${S.hist.length})</summary><div class="qpu-tw" style="margin-top:8px"><table><tr><th>إمتى</th><th>الأكونت</th><th>عدد</th><th>إجمالي</th><th></th></tr>
@@ -2593,6 +2595,14 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     const sig = S.headers.join('|'), M = S.map[sig] || {};
     return `<div style="margin-top:12px;padding:12px;border:1px dashed var(--qpu-line);border-radius:10px"><b>🧩 كل خانة جاية من أنهي عمود في الشيت:</b><div class="qpu-grid" style="margin-top:8px">
       ${FIELDS.map(([k, l]) => `<div><label>${l}</label><select data-map="${k}"><option value="">— مش موجود —</option>${S.headers.map((hd, i) => `<option value="${i}" ${String(M[k]) === String(i) ? 'selected' : ''}>${esc(hd || 'عمود ' + (i + 1))}</option>`).join('')}</select></div>`).join('')}</div></div>`;
+  }
+  function dupHtml(){
+    const G = dupGroups(); if(!G.length) return '<p style="color:var(--qpu-mut)">مفيش أوردرات متكررة.</p>';
+    return G.map(grp => { const sorted = grp.slice().sort((x, y) => (numOf(y.amount) || 0) - (numOf(x.amount) || 0)), top = sorted[0];
+      return `<div style="border:1px solid var(--qpu-line);border-radius:10px;padding:10px;margin-bottom:12px">
+        <div class="qpu-row" style="justify-content:space-between;margin-bottom:6px"><b>🔁 الموبايل ${esc(top.phone)} متكرر ${grp.length} مرات</b>
+        <button class="qpu-btn ok" data-keep="${esc(phoneOf(top.phone))}">⭐ خلي الأغلى (${(numOf(top.amount) || 0).toLocaleString('ar-EG')} ج) وامسح الباقي</button></div>
+        ${tableHtml(sorted)}</div>`; }).join('');
   }
   function tableHtml(L){
     if(!L.length) return '<p style="color:var(--qpu-mut)">مفيش.</p>';
@@ -2643,6 +2653,15 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     ROOT.querySelectorAll('[data-city]').forEach(s => s.onchange = () => { const r = S.rows[+s.dataset.city]; r.city = s.value; check(r); draw(); });
     ROOT.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { const r = S.rows[+b.dataset.rm]; if(!r || !confirm(`تشيل أوردر "${r.name}"؟ مش هيرجع تاني.`)) return; S.done.add(rowKey(r)); sv(LS.done, [...S.done]); S.rows.splice(+b.dataset.rm, 1); dupCheck(); advancePtr(); draw(); });
     ROOT.querySelectorAll('[data-undrop]').forEach(b => b.onclick = () => { const r = S.dropped.splice(+b.dataset.undrop, 1)[0]; if(!r) return; S.done.delete(rowKey(r)); sv(LS.done, [...S.done]); S.rows.push(check(r)); S.rows.sort((a, b) => a.line - b.line); dupCheck(); S.tab = 'ready'; draw(); });
+    ROOT.querySelectorAll('[data-keep]').forEach(b => b.onclick = () => {
+      const key = b.dataset.keep, G = (S.rows || []).filter(r => !r.serial && r.dup && phoneOf(r.phone) === key);
+      if(G.length < 2) return;
+      const top = G.slice().sort((x, y) => (numOf(y.amount) || 0) - (numOf(x.amount) || 0))[0], losers = G.filter(r => r !== top);
+      if(!confirm(`هيتمسح ${losers.length} أوردر متكرر (الأرخص)، والأغلى (${numOf(top.amount) || 0} ج) هيفضل جاهز للرفع. تكمل؟`)) return;
+      losers.forEach(r => S.done.add(rowKey(r))); sv(LS.done, [...S.done].slice(-30000));
+      S.rows = S.rows.filter(r => !losers.includes(r)); dupCheck(); advancePtr();
+      S.tab = 'ready'; msg(`✅ اتمسح ${losers.length} متكرر، والأغلى اتحط في الجاهزين.`, 'ok');
+    });
     ROOT.querySelectorAll('[data-hcsv]').forEach(b => b.onclick = () => { const x = S.hist[+b.dataset.hcsv]; csvDownload(`QP ${x.at.slice(0, 10)} (${x.n}).csv`, [['رقم الشحنة', 'سطر', 'الاسم', 'الموبايل', 'السعر'], ...x.orders.map(o => [o.serial, o.line, o.name, o.phone, o.amount])]); });
   }
   function mount(){
