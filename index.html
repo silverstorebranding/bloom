@@ -2576,7 +2576,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
         <div class="qpu-kpi"><b style="color:var(--qpu-bad)">${bad.length}</b><span>⚠️ فيها مشاكل</span></div><div class="qpu-kpi"><b>${(S.dropped || []).length}</b><span>🔁 مرفوعة بالفعل على QP (اتشالت)</span></div>
         <div class="qpu-kpi"><b>${tot.toLocaleString('ar-EG')}</b><span>إجمالي الجاهزين (ج)</span></div><div class="qpu-kpi"><b>${dn.length}</b><span>📦 اترفعت دلوقتي</span></div></div>
                 <div class="qpu-tabs">${[['ready', `✅ جاهزة (${rd.length})`], ['bad', `⚠️ فيها مشاكل (${bad.length})`], ['dup', `🔁 متكررة (${dupGroups().reduce((a, g) => a + g.length, 0)})`], ['qp', `🔁 على QP بالفعل (${(S.dropped || []).length})`], ['done', `📦 اترفعت (${dn.length})`]].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
-        ${S.tab === 'qp' ? qpTable() : S.tab === 'dup' ? dupHtml() : tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
+        ${S.tab === 'qp' ? qpTable() : S.tab === 'dup' ? dupHtml() : (S.tab === 'done' ? sumHtml(dn) : '') + tableHtml(S.tab === 'ready' ? rd : S.tab === 'bad' ? bad : dn)}
         <div class="qpu-row"><button class="qpu-btn ok" data-a="upload" ${!rd.length || S.busy ? 'disabled' : ''}>${S.prog.startsWith('بيرفع') ? '⏳ ' + esc(S.prog) : `🚀 ارفع الـ ${rd.length} الجاهزين على QP`}</button><span style="font-size:13px;color:var(--qpu-mut)">على أكونت: <b>${esc(acctName())}</b></span>
           ${dn.length ? '<button class="qpu-btn" data-a="csv">⬇️ نزّل اللي اترفع (CSV)</button>' : ''}</div>
         <p style="font-size:12.5px;color:var(--qpu-mut);margin:8px 0 0">💡 تقدر تعدّل أي خانة بالضغط عليها. ✕ بيشيل الأوردر ومايرجعش. 🚀 الرفع بيبدأ بالأقدم (اللي تحت). 📍 المؤشر بيطلع لفوق لوحده بعد الرفع لحد أول أوردر لسه مستني.</p></div>`;
@@ -2595,6 +2595,41 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
     const sig = S.headers.join('|'), M = S.map[sig] || {};
     return `<div style="margin-top:12px;padding:12px;border:1px dashed var(--qpu-line);border-radius:10px"><b>🧩 كل خانة جاية من أنهي عمود في الشيت:</b><div class="qpu-grid" style="margin-top:8px">
       ${FIELDS.map(([k, l]) => `<div><label>${l}</label><select data-map="${k}"><option value="">— مش موجود —</option>${S.headers.map((hd, i) => `<option value="${i}" ${String(M[k]) === String(i) ? 'selected' : ''}>${esc(hd || 'عمود ' + (i + 1))}</option>`).join('')}</select></div>`).join('')}</div></div>`;
+  }
+  function parseItems(text){
+    const out = [];
+    String(text || '').split(/\s*\|\s*|\n/).forEach(seg => {
+      seg = seg.trim(); if(!seg) return;
+      const sz = seg.match(/مقاس\s*([0-9٠-٩]+)/);
+      const size = sz ? String(numOf(sz[1])) : '—';
+      const body = seg.replace(/\s*[—–-]?\s*مقاس.*$/, '').trim();
+      const m = body.match(/^([0-9٠-٩]+)\s*(.*)$/);
+      const total = m ? (numOf(m[1]) || 0) : 1;
+      const rest = m ? m[2] : body;
+      const c = rest.indexOf(':');
+      const kind = (c >= 0 ? rest.slice(0, c) : rest).trim();
+      const subs = c >= 0 ? rest.slice(c + 1).split('+').map(x => x.trim()).filter(Boolean) : [];
+      if(!subs.length){ out.push({ size, label: kind || '—', qty: total }); return; }
+      const parts = subs.map(p => { const mm = p.match(/^([0-9٠-٩]+)\s+(.*)$/); return mm ? { q: numOf(mm[1]), n: mm[2] } : { q: null, n: p }; });
+      const explicit = parts.every(p => p.q !== null);
+      parts.forEach(p => out.push({ size, label: (kind + ' ' + p.n).trim(), qty: explicit ? p.q : total / parts.length }));
+    });
+    return out;
+  }
+  function sumHtml(rows){
+    const qn = v => Number(v).toLocaleString('ar-EG', { maximumFractionDigits: 2 });
+    const G = {}; let total = 0;
+    rows.forEach(r => parseItems(r.contents).forEach(it => {
+      const k = it.size + '|' + it.label;
+      if(!G[k]) G[k] = { size: it.size, label: it.label, qty: 0 };
+      G[k].qty += it.qty; total += it.qty;
+    }));
+    const list = Object.values(G).sort((a, b) => (Number(a.size) || 999) - (Number(b.size) || 999) || a.label.localeCompare(b.label, 'ar'));
+    if(!list.length) return '';
+    return `<div class="qpu-card" style="margin-bottom:12px"><h3>🧮 ملخص القطع اللي اترفعت (عشان تشيلها من المخزن)</h3>
+      <div class="qpu-tw"><table><tr><th>المقاس</th><th>الصنف</th><th>الكمية</th></tr>
+      ${list.map(x => `<tr><td>مقاس ${esc(x.size)}</td><td style="text-align:right">${esc(x.label)}</td><td><b>${qn(x.qty)}</b> قطعة</td></tr>`).join('')}
+      <tr><td colspan="2" style="text-align:right"><b>الإجمالي</b></td><td><b>${qn(total)}</b> قطعة</td></tr></table></div></div>`;
   }
   function dupHtml(){
     const G = dupGroups(); if(!G.length) return '<p style="color:var(--qpu-mut)">مفيش أوردرات متكررة.</p>';
