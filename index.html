@@ -2631,6 +2631,42 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
       ${list.map(x => `<tr><td>مقاس ${esc(x.size)}</td><td style="text-align:right">${esc(x.label)}</td><td><b>${qn(x.qty)}</b> قطعة</td></tr>`).join('')}
       <tr><td colspan="2" style="text-align:right"><b>الإجمالي</b></td><td><b>${qn(total)}</b> قطعة</td></tr></table></div></div>`;
   }
+  // 📅 أوردرات النهارده المقبولة على QP (مش المرفوضة)
+  async function qpOrdersOn(day){
+    const out = [];
+    for(let page = 1; page <= 300; page++){
+      const url = QP + '/addorders/order/?rejected=0&printO=All&status=&order_serial=&full_name=&phone_number=&city=&order_date=' + day + '&to_date=' + day + '&page=' + page + '&page_size=100';
+      const j = await siteGet(url), L = j.results || []; if(!L.length) break;
+      out.push(...L); if(!j.next) break;
+    }
+    return out;
+  }
+  // 🔎 بيجيب أوردرات النهارده من QP، وبيطابق كل واحد بسطره في الشيت بالموبايل عشان يجيب الطلب (القطع)
+  async function todayFromQP(){
+    if(!S.siteOk) return msg('لازم تدخل موقع QP الأول.', 'err');
+    const url = sheetUrl(); if(!url) return msg('حط رابط الشيت الأول.', 'err');
+    S.busy = true; msg('بيجيب أوردرات النهارده من QP ويطابقها بالشيت...', 'info');
+    try{
+      const day = ymd(new Date()), Q = await qpOrdersOn(day);
+      const r = await fetch(url, { cache:'no-store' }); const t = await r.text();
+      if(!r.ok || /<html/i.test(t.slice(0, 200))) throw new Error('مش قادر يقرا الشيت.');
+      const A = parseCSV(t); const H = A[0].map(x => String(x).trim());
+      const M = S.map[H.join('|')] || autoMap(H);
+      const g = (row, k) => M[k] !== undefined && M[k] !== '' ? String(row[M[k]] ?? '').trim() : '';
+      const sheet = A.slice(1).map((row, i) => ({ name:g(row, 'name'), phone:g(row, 'phone'), phone2:g(row, 'phone2'), contents:g(row, 'contents'), amount:g(row, 'amount'), line:i + 2 }));
+      const used = new Set(); const out = [];
+      Q.forEach(o => {
+        const k = phoneOf(o.phone);
+        const idx = sheet.findIndex((x, ix) => !used.has(ix) && k && (phoneOf(x.phone) === k || phoneOf(x.phone2) === k));
+        if(idx >= 0){ used.add(idx); out.push({ ...sheet[idx], serial:o.serial, at:o.order_date }); }
+        else out.push({ name:o.full_name || '', phone:o.phone, contents:'', amount:'', serial:o.serial, at:o.order_date, missing:true });
+      });
+      S.todayQP = out;
+      const miss = out.filter(x => x.missing).length;
+      msg(`✅ ${out.length} أوردر اتقبل على QP النهارده` + (miss ? ` — ⚠️ ${miss} مالقيتش ليهم سطر في الشيت` : ''), miss ? 'err' : 'ok');
+    }catch(e){ msg(/Failed to fetch/i.test(e.message) ? 'مش قادر يوصل لـ QP أو الشيت.' : e.message, 'err'); }
+    S.busy = false;
+  }
   // 📅 كل الأوردرات اللي اترفعت النهارده من السجل (حتى من جلسات قبل كده)
   function todayOrders(){
     const t = ymd(new Date());
@@ -2638,15 +2674,14 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
       .flatMap(x => (x.orders || []).map(o => ({ ...o, at: x.at, acct: x.acct })));
   }
   function todayHtml(){
-    const L = todayOrders(); if(!L.length) return '';
-    const old = L.filter(o => !o.contents).length;
-    return `<div class="qpu-card" style="margin-bottom:12px;border-color:var(--qpu-pri)"><h3>📅 اللي اترفع النهارده: ${L.length} أوردر</h3>
-      ${old ? `<p style="font-size:12.5px;color:var(--qpu-mut);margin:0 0 8px">⚠️ ${old} أوردر اترفع قبل التحديث ده، فمفيش تفاصيل قطع ليهم.</p>` : ''}
-      ${sumHtml(L, 'ملخص القطع اللي اترفعت النهارده')}
-      <div class="qpu-row"><button class="qpu-btn" data-a="daycsv">⬇️ نزّل ملخص النهارده (CSV)</button></div></div>`;
+    const L = S.todayQP || [], miss = L.filter(o => o.missing).length;
+    return `<div class="qpu-card" style="margin-bottom:12px;border-color:var(--qpu-pri)"><h3>📅 اللي اترفع النهارده على QP</h3>
+      <div class="qpu-row"><button class="qpu-btn pri" data-a="todayqp" ${S.busy ? 'disabled' : ''}>🔄 هات اللي اترفع النهارده</button>${L.length ? '<button class="qpu-btn" data-a="daycsv">⬇️ نزّل ملخص النهارده (CSV)</button>' : ''}</div>
+      ${L.length ? `<p style="font-size:13px;color:var(--qpu-mut);margin:8px 0">${L.length} أوردر على QP النهارده${miss ? ` · ⚠️ ${miss} منهم مالقيتش ليهم سطر في الشيت (مش هيتحسب قطعهم)` : ''}</p>${sumHtml(L, 'ملخص القطع اللي اترفعت النهارده')}` : '<p style="font-size:13px;color:var(--qpu-mut);margin:8px 0 0">دوس الزرار عشان يجيب كل أوردرات النهارده من QP ويحسب قطعها من الشيت.</p>'}
+    </div>`;
   }
   function dayCsv(){
-    const L = todayOrders(); if(!L.length) return;
+    const L = S.todayQP || []; if(!L.length) return;
     const qn = v => Number(v);
     const rows = [['رقم الشحنة', 'الوقت', 'الاسم', 'الموبايل', 'الصنف', 'المقاس', 'الكمية']];
     const G = {};
@@ -2722,6 +2757,7 @@ makeAccounts({ route:'accounts', table:'accounts_entries', icon:'💼', title:'�
         setPtr(n); S.rows = null; S.dropped = []; msg(n ? `📍 المؤشر بقى: اتاخد آخر ${n} سطر من تحت.` : '📍 المؤشر رجع لآخر الشيت.', 'ok');
       }
       if(a === 'daycsv') dayCsv();
+      if(a === 'todayqp') todayFromQP();
       if(a === 'csv'){ const L = S.rows.filter(r => r.serial); csvDownload(`QP ${ymd(new Date())} (${L.length}).csv`, [['رقم الشحنة', 'سطر في الشيت', 'الاسم', 'الموبايل', 'العنوان', 'المدينة', 'السعر', 'الطلب', 'notes'], ...L.map(r => [r.serial, r.line, r.name, '0' + phoneOf(r.phone), r.address, r.city, r.amount, r.contents, noteOf(r)])]); }
     });
     ROOT.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; draw(); });
